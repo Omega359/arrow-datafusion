@@ -155,6 +155,7 @@ pub(crate) fn handle<'a, O, F, S>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
+    safe: bool,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
@@ -164,14 +165,25 @@ where
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
+                unary_string_to_primitive_function::<i32, O, _>(
+                    &[a.as_ref()],
+                    op,
+                    name,
+                    safe,
+                )?,
             ))),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                let result = a.as_ref().map(|x| op(x)).transpose();
+                if let Ok(v) = result {
+                    Ok(ColumnarValue::Scalar(S::scalar(v)))
+                } else if safe {
+                    Ok(ColumnarValue::Scalar(S::scalar(None)))
+                } else {
+                    Err(result.err().unwrap())
+                }
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -186,6 +198,7 @@ pub(crate) fn handle_multiple<'a, O, F, S, M>(
     op: F,
     op2: M,
     name: &str,
+    safe: bool,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
@@ -217,7 +230,9 @@ where
                 }
 
                 Ok(ColumnarValue::Array(Arc::new(
-                    strings_to_primitive_function::<i32, O, _, _>(args, op, op2, name)?,
+                    strings_to_primitive_function::<i32, O, _, _>(
+                        args, op, op2, name, safe,
+                    )?,
                 )))
             }
             other => {
@@ -264,8 +279,13 @@ where
 
                 if let Some(v) = val {
                     v
+                } else if safe {
+                    Ok(ColumnarValue::Scalar(S::scalar(None)))
                 } else {
-                    Err(err.unwrap())
+                    match err {
+                        Some(e) => Err(e),
+                        None => Ok(ColumnarValue::Scalar(S::scalar(None))),
+                    }
                 }
             }
             other => {
@@ -285,12 +305,13 @@ where
 /// This function errors iff:
 /// * the number of arguments is not > 1 or
 /// * the array arguments are not castable to a `GenericStringArray` or
-/// * the function `op` errors for all input
+/// * the function `op` errors for all input and safe is false
 pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
     args: &'a [ColumnarValue],
     op: F,
     op2: F2,
     name: &str,
+    safe: bool,
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
@@ -360,6 +381,7 @@ where
             };
 
             val.transpose()
+                .or_else(|e| if safe { Ok(None) } else { Err(e) })
         })
         .collect()
 }
@@ -371,11 +393,12 @@ where
 /// This function errors iff:
 /// * the number of arguments is not 1 or
 /// * the first argument is not castable to a `GenericStringArray` or
-/// * the function `op` errors
+/// * the function `op` errors and safe is false
 fn unary_string_to_primitive_function<'a, T, O, F>(
     args: &[&'a dyn Array],
     op: F,
     name: &str,
+    safe: bool,
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
@@ -393,5 +416,12 @@ where
     let array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
-    array.iter().map(|x| x.map(&op).transpose()).collect()
+    array
+        .iter()
+        .map(|x| {
+            x.map(&op)
+                .transpose()
+                .or_else(|e| if safe { Ok(None) } else { Err(e) })
+        })
+        .collect()
 }
