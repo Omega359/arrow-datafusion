@@ -47,9 +47,11 @@ impl ToDateFunc {
         }
     }
 
-    pub fn with_safe(&mut self, safe: bool) -> &mut Self {
-        self.safe = safe;
-        self
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
+        }
     }
 
     fn to_date(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
