@@ -183,6 +183,7 @@ pub(crate) fn handle<O, F, S>(
     args: &[ColumnarValue],
     op: F,
     name: &str,
+    safe: bool,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
@@ -195,26 +196,35 @@ where
                 unary_string_to_primitive_function::<&StringViewArray, O, _>(
                     a.as_ref().as_string_view(),
                     op,
+                    safe,
                 )?,
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i64>, O, _>(
                     a.as_ref().as_string::<i64>(),
                     op,
+                    safe,
                 )?,
             ))),
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i32>, O, _>(
                     a.as_ref().as_string::<i32>(),
                     op,
+                    safe,
                 )?,
             ))),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let result = a.as_ref().map(|x| op(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                let result = a.as_ref().map(|x| op(x)).transpose();
+                if let Ok(v) = result {
+                    Ok(ColumnarValue::Scalar(S::scalar(v)))
+                } else if safe {
+                    Ok(ColumnarValue::Scalar(S::scalar(None)))
+                } else {
+                    Err(result.err().unwrap())
+                }
             }
             _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
         },
@@ -229,6 +239,7 @@ pub(crate) fn handle_multiple<O, F, S, M>(
     op: F,
     op2: M,
     name: &str,
+    safe: bool,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
@@ -260,7 +271,7 @@ where
                 }
 
                 Ok(ColumnarValue::Array(Arc::new(
-                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?,
+                    strings_to_primitive_function::<O, _, _>(args, op, op2, name, safe)?,
                 )))
             }
             other => {
@@ -270,11 +281,11 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
+                let mut val: Option<Result<ColumnarValue>> = None;
+                let mut err: Option<DataFusionError> = None;
                 let a = a.as_ref();
                 // ASK: Why do we trust `a` to be non-null at this point?
                 let a = unwrap_or_internal_err!(a);
-
-                let mut ret = None;
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
                     let ColumnarValue::Scalar(
@@ -289,17 +300,26 @@ where
                     if let Some(s) = x {
                         match op(a, s.as_str()) {
                             Ok(r) => {
-                                ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
+                                val = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
                                     op2(r),
                                 )))));
                                 break;
                             }
-                            Err(e) => ret = Some(Err(e)),
+                            Err(e) => err = Some(e),
                         }
                     }
                 }
 
-                unwrap_or_internal_err!(ret)
+                if let Some(v) = val {
+                    v
+                } else if safe {
+                    Ok(ColumnarValue::Scalar(S::scalar(None)))
+                } else {
+                    match err {
+                        Some(e) => Err(e),
+                        None => Ok(ColumnarValue::Scalar(S::scalar(None))),
+                    }
+                }
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -317,12 +337,13 @@ where
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not > 1 or
-/// * the function `op` errors for all input
+/// * the function `op` errors for all input and safe is false
 pub(crate) fn strings_to_primitive_function<O, F, F2>(
     args: &[ColumnarValue],
     op: F,
     op2: F2,
     name: &str,
+    safe: bool,
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
@@ -346,6 +367,7 @@ where
                     &args[1..],
                     op,
                     op2,
+                    safe,
                 )
             }
             DataType::LargeUtf8 => {
@@ -355,6 +377,7 @@ where
                     &args[1..],
                     op,
                     op2,
+                    safe,
                 )
             }
             DataType::Utf8 => {
@@ -364,6 +387,7 @@ where
                     &args[1..],
                     op,
                     op2,
+                    safe,
                 )
             }
             other => exec_err!(
@@ -383,6 +407,7 @@ fn handle_array_op<'a, O, V, F, F2>(
     args: &[ColumnarValue],
     op: F,
     op2: F2,
+    safe: bool,
 ) -> Result<PrimitiveArray<O>>
 where
     V: StringArrayType<'a>,
@@ -422,6 +447,7 @@ where
             };
 
             val.transpose()
+                .or_else(|e| if safe { Ok(None) } else { Err(e) })
         })
         .collect()
 }
@@ -432,10 +458,11 @@ where
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not 1 or
-/// * the function `op` errors
+/// * the function `op` errors and safe is false
 fn unary_string_to_primitive_function<'a, StringArrType, O, F>(
     array: StringArrType,
     op: F,
+    safe: bool,
 ) -> Result<PrimitiveArray<O>>
 where
     StringArrType: StringArrayType<'a>,
@@ -443,5 +470,12 @@ where
     F: Fn(&'a str) -> Result<O::Native>,
 {
     // first map is the iterator, second is for the `Option<_>`
-    array.iter().map(|x| x.map(&op).transpose()).collect()
+    array
+        .iter()
+        .map(|x| {
+            x.map(&op)
+                .transpose()
+                .or_else(|e| if safe { Ok(None) } else { Err(e) })
+        })
+        .collect()
 }
