@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::compute::CastOptions;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -33,26 +34,36 @@ use crate::datetime::common::*;
 #[derive(Debug)]
 pub struct ToTimestampFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub safe: bool,
 }
 
 #[derive(Debug)]
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub safe: bool,
 }
 
 #[derive(Debug)]
 pub struct ToTimestampMillisFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub safe: bool,
 }
 
 #[derive(Debug)]
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub safe: bool,
 }
 
 #[derive(Debug)]
 pub struct ToTimestampNanosFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub safe: bool,
 }
 
 impl Default for ToTimestampFunc {
@@ -65,6 +76,14 @@ impl ToTimestampFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 }
@@ -79,6 +98,14 @@ impl ToTimestampSecondsFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 }
@@ -93,6 +120,14 @@ impl ToTimestampMillisFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 }
@@ -107,6 +142,14 @@ impl ToTimestampMicrosFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 }
@@ -121,6 +164,14 @@ impl ToTimestampNanosFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 }
@@ -162,18 +213,29 @@ impl ScalarUDFImpl for ToTimestampFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32 | DataType::Int64 => args[0]
-                .cast_to(&Timestamp(Second, None), None)?
-                .cast_to(&Timestamp(Nanosecond, None), None),
-            DataType::Null | DataType::Float64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Nanosecond, None), None)
-            }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
-            }
-            DataType::Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
-            }
+            DataType::Int32 | DataType::Int64 => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Second, None), Some(&CastOptions::default()))?
+                    .cast_to(&Timestamp(Nanosecond, None), Some(&CastOptions::default())),
+                false => args[0]
+                    .cast_to(&Timestamp(Second, None), None)?
+                    .cast_to(&Timestamp(Nanosecond, None), None),
+            },
+            DataType::Null | DataType::Float64 => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, None), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Nanosecond, None), None),
+            },
+            Timestamp(_, tz) => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, tz), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
+            },
+            DataType::Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                args,
+                "to_timestamp",
+                self.safe,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp",
@@ -215,15 +277,22 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Second, None), None)
-            }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Second, Some(tz)), None)
-            }
-            DataType::Utf8 => {
-                to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
-            }
+            DataType::Null | DataType::Int32 | DataType::Int64 => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Second, None), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Second, None), None),
+            },
+            Timestamp(_, tz) => match self.safe {
+                true => {
+                    args[0].cast_to(&Timestamp(Second, tz), Some(&CastOptions::default()))
+                }
+                false => args[0].cast_to(&Timestamp(Second, tz), None),
+            },
+            DataType::Utf8 => to_timestamp_impl::<TimestampSecondType>(
+                args,
+                "to_timestamp_seconds",
+                self.safe,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_seconds",
@@ -265,15 +334,23 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Millisecond, None), None)
-            }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
-            }
-            DataType::Utf8 => {
-                to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
-            }
+            DataType::Null | DataType::Int32 | DataType::Int64 => match self.safe {
+                true => args[0].cast_to(
+                    &Timestamp(Millisecond, None),
+                    Some(&CastOptions::default()),
+                ),
+                false => args[0].cast_to(&Timestamp(Millisecond, None), None),
+            },
+            Timestamp(_, tz) => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Millisecond, tz), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Millisecond, tz), None),
+            },
+            DataType::Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
+                args,
+                "to_timestamp_millis",
+                self.safe,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_millis",
@@ -315,15 +392,23 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Microsecond, None), None)
-            }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
-            }
-            DataType::Utf8 => {
-                to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
-            }
+            DataType::Null | DataType::Int32 | DataType::Int64 => match self.safe {
+                true => args[0].cast_to(
+                    &Timestamp(Microsecond, None),
+                    Some(&CastOptions::default()),
+                ),
+                false => args[0].cast_to(&Timestamp(Microsecond, None), None),
+            },
+            Timestamp(_, tz) => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Microsecond, tz), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Microsecond, tz), None),
+            },
+            DataType::Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
+                args,
+                "to_timestamp_micros",
+                self.safe,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_micros",
@@ -365,15 +450,21 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Nanosecond, None), None)
-            }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
-            }
-            DataType::Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
-            }
+            DataType::Null | DataType::Int32 | DataType::Int64 => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, None), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Nanosecond, None), None),
+            },
+            Timestamp(_, tz) => match self.safe {
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, tz), Some(&CastOptions::default())),
+                false => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
+            },
+            DataType::Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                args,
+                "to_timestamp_nanos",
+                self.safe,
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_nanos",
@@ -396,6 +487,7 @@ fn return_type_for(arg: &DataType, unit: TimeUnit) -> DataType {
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,
+    safe: bool,
 ) -> Result<ColumnarValue> {
     let factor = match T::UNIT {
         Second => 1_000_000_000,
@@ -409,12 +501,14 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
             args,
             |s| string_to_timestamp_nanos_shim(s).map(|n| n / factor),
             name,
+            safe,
         ),
         n if n >= 2 => handle_multiple::<T, _, T, _>(
             args,
             string_to_timestamp_nanos_formatted,
             |n| n / factor,
             name,
+            safe,
         ),
         _ => exec_err!("Unsupported 0 argument count for function {name}"),
     }
@@ -438,28 +532,32 @@ mod tests {
 
     use super::*;
 
-    fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
+    fn to_timestamp_unsafe(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp", false)
+    }
+
+    fn to_timestamp_safe(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp", true)
     }
 
     /// to_timestamp_millis SQL function
     fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
+        to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis", false)
     }
 
     /// to_timestamp_micros SQL function
     fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
+        to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros", false)
     }
 
     /// to_timestamp_nanos SQL function
     fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
+        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos", false)
     }
 
     /// to_timestamp_seconds SQL function
     fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
+        to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds", false)
     }
 
     #[test]
@@ -478,7 +576,7 @@ mod tests {
 
         let string_array =
             ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
-        let parsed_timestamps = to_timestamp(&[string_array])
+        let parsed_timestamps = to_timestamp_unsafe(&[string_array])
             .expect("that to_timestamp parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
             assert_eq!(parsed_array.len(), 2);
@@ -519,7 +617,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(format2_builder.finish()) as ArrayRef),
             ColumnarValue::Array(Arc::new(format3_builder.finish()) as ArrayRef),
         ];
-        let parsed_timestamps = to_timestamp(&string_array)
+        let parsed_timestamps = to_timestamp_unsafe(&string_array)
             .expect("that to_timestamp with format args parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
             assert_eq!(parsed_array.len(), 2);
@@ -541,7 +639,7 @@ mod tests {
 
         let expected_err =
             "Execution error: Unsupported data type Int64 for function to_timestamp";
-        match to_timestamp(&[int64array]) {
+        match to_timestamp_unsafe(&[int64array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(
@@ -567,7 +665,7 @@ mod tests {
 
         let expected_err =
             "Execution error: Unsupported data type Int64 for function to_timestamp";
-        match to_timestamp(&int64array) {
+        match to_timestamp_unsafe(&int64array) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(
@@ -580,11 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_with_unparseable_data() -> Result<()> {
+    fn to_timestamp_with_unparseable_data_with_safe_off() -> Result<()> {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
-
         date_string_builder.append_null();
-
         date_string_builder.append_value("2020-09-08 - 13:42:29.19085Z");
 
         let string_array =
@@ -592,7 +688,7 @@ mod tests {
 
         let expected_err =
             "Arrow error: Parser error: Error parsing timestamp from '2020-09-08 - 13:42:29.19085Z': error parsing time";
-        match to_timestamp(&[string_array]) {
+        match to_timestamp_unsafe(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(
@@ -605,11 +701,36 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_with_invalid_tz() -> Result<()> {
+    fn to_timestamp_with_unparseable_data_with_safe_on() -> Result<()> {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
-
         date_string_builder.append_null();
+        date_string_builder.append_value("2020-09-08 - 13:42:29.19085Z");
 
+        let string_array =
+            ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
+
+        let parsed_timestamps = to_timestamp_safe(&[string_array])
+            .expect("that to_timestamp with format args parsed values without error when safe is on");
+
+        let mut ts_builder = TimestampNanosecondArray::builder(2);
+        ts_builder.append_null();
+        ts_builder.append_null();
+        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+
+        if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
+            assert_eq!(parsed_array.len(), 2);
+            assert_eq!(expected_timestamps, parsed_array.as_ref());
+        } else {
+            panic!("Expected a columnar array")
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_with_invalid_tz_with_safe_off() -> Result<()> {
+        let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
+        date_string_builder.append_null();
         date_string_builder.append_value("2020-09-08T13:42:29ZZ");
 
         let string_array =
@@ -617,7 +738,7 @@ mod tests {
 
         let expected_err =
             "Arrow error: Parser error: Invalid timezone \"ZZ\": failed to parse timezone";
-        match to_timestamp(&[string_array]) {
+        match to_timestamp_unsafe(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(
@@ -630,7 +751,34 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_with_no_matching_formats() -> Result<()> {
+    fn to_timestamp_with_invalid_tz_with_safe_on() -> Result<()> {
+        let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
+        date_string_builder.append_null();
+        date_string_builder.append_value("2020-09-08T13:42:29ZZ");
+
+        let string_array =
+            ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
+
+        let parsed_timestamps = to_timestamp_safe(&[string_array])
+            .expect("that to_timestamp with format args parsed values without error when safe is on");
+
+        let mut ts_builder = TimestampNanosecondArray::builder(2);
+        ts_builder.append_null();
+        ts_builder.append_null();
+        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+
+        if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
+            assert_eq!(parsed_array.len(), 2);
+            assert_eq!(expected_timestamps, parsed_array.as_ref());
+        } else {
+            panic!("Expected a columnar array")
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_with_no_matching_formats_with_safe_off() -> Result<()> {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
         let mut format1_builder = StringBuilder::with_capacity(2, 1024);
         let mut format2_builder = StringBuilder::with_capacity(2, 1024);
@@ -655,7 +803,7 @@ mod tests {
 
         let expected_err =
             "Execution error: Error parsing timestamp from '2020-09-08T13:42:29.19085Z' using format '%H:%M:%S': input contains invalid characters";
-        match to_timestamp(&string_array) {
+        match to_timestamp_unsafe(&string_array) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(
@@ -664,6 +812,54 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_with_no_matching_formats_with_safe_on() -> Result<()> {
+        let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
+        let mut format1_builder = StringBuilder::with_capacity(2, 1024);
+        let mut format2_builder = StringBuilder::with_capacity(2, 1024);
+        let mut format3_builder = StringBuilder::with_capacity(2, 1024);
+
+        date_string_builder.append_null();
+        format1_builder.append_null();
+        format2_builder.append_null();
+        format3_builder.append_null();
+
+        date_string_builder.append_value("2020-09-08T13:42:29.19085Z");
+        format1_builder.append_value("%s");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%H:%M:%S");
+
+        date_string_builder.append_value("2020-09-08T13:42:29");
+        format1_builder.append_value("%s");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%dT%H:%M:%S");
+
+        let string_array = [
+            ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format1_builder.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format2_builder.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format3_builder.finish()) as ArrayRef),
+        ];
+
+        let parsed_timestamps = to_timestamp_safe(&string_array)
+            .expect("that to_timestamp with format args parsed values without error when safe is on");
+
+        let mut ts_builder = TimestampNanosecondArray::builder(2);
+        ts_builder.append_null();
+        ts_builder.append_null();
+        ts_builder.append_value(1599572549000000000);
+        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+
+        if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
+            assert_eq!(parsed_array.len(), 3);
+            assert_eq!(expected_timestamps, parsed_array.as_ref());
+        } else {
+            panic!("Expected a columnar array")
+        }
+
         Ok(())
     }
 
@@ -870,7 +1066,7 @@ mod tests {
         let data = date_string_builder.finish();
 
         let funcs: Vec<(ScalarFunctionImplementation, TimeUnit)> = vec![
-            (Arc::new(to_timestamp), Nanosecond),
+            (Arc::new(to_timestamp_unsafe), Nanosecond),
             (Arc::new(to_timestamp_micros), Microsecond),
             (Arc::new(to_timestamp_millis), Millisecond),
             (Arc::new(to_timestamp_nanos), Nanosecond),

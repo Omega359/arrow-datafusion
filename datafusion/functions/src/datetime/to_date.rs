@@ -17,12 +17,12 @@
 
 use std::any::Any;
 
+use crate::datetime::common::*;
+use arrow::compute::CastOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-
-use crate::datetime::common::*;
 use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -30,6 +30,8 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 #[derive(Debug)]
 pub struct ToDateFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    safe: bool,
 }
 
 impl Default for ToDateFunc {
@@ -42,6 +44,14 @@ impl ToDateFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 
@@ -57,6 +67,7 @@ impl ToDateFunc {
                     )),
                 },
                 "to_date",
+                self.safe,
             ),
             2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
@@ -71,6 +82,7 @@ impl ToDateFunc {
                 },
                 |n| n,
                 "to_date",
+                self.safe,
             ),
             0 => exec_err!("Unsupported 0 argument count for function to_date"),
         }
@@ -110,7 +122,10 @@ impl ScalarUDFImpl for ToDateFunc {
             | DataType::Null
             | DataType::Float64
             | DataType::Date32
-            | DataType::Date64 => args[0].cast_to(&DataType::Date32, None),
+            | DataType::Date64 => match self.safe {
+                true => args[0].cast_to(&DataType::Date32, Some(&CastOptions::default())),
+                false => args[0].cast_to(&DataType::Date32, None),
+            },
             DataType::Utf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
