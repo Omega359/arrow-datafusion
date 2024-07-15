@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::datetime::common::*;
+use arrow::compute::CastOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
@@ -66,6 +67,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug)]
 pub struct ToDateFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    safe: bool,
 }
 
 impl Default for ToDateFunc {
@@ -78,6 +81,14 @@ impl ToDateFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            safe: false,
+        }
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            safe,
         }
     }
 
@@ -93,6 +104,7 @@ impl ToDateFunc {
                     )),
                 },
                 "to_date",
+                self.safe,
             ),
             2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
@@ -107,6 +119,7 @@ impl ToDateFunc {
                 },
                 |n| n,
                 "to_date",
+                self.safe,
             ),
             0 => exec_err!("Unsupported 0 argument count for function to_date"),
         }
@@ -145,9 +158,10 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
-                args[0].cast_to(&Date32, None)
-            }
+            Int32 | Int64 | Null | Float64 | Date32 | Date64 => match self.safe {
+                true => args[0].cast_to(&Date32, Some(&CastOptions::default())),
+                false => args[0].cast_to(&Date32, None),
+            },
             Utf8View | LargeUtf8 | Utf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)

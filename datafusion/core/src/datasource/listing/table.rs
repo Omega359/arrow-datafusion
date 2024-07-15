@@ -740,7 +740,14 @@ impl ListingTable {
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
-            builder.push(Field::new(part_col_name, part_col_type.clone(), false));
+            // only add the partition if it is not already in the file_schema
+            if !file_schema
+                .fields
+                .iter()
+                .any(|f| f.name().eq_ignore_ascii_case(part_col_name))
+            {
+                builder.push(Field::new(part_col_name, part_col_type.clone(), false));
+            }
         }
 
         let table_schema = Arc::new(
