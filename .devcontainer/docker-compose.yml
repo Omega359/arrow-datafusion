@@ -1,14 +1,3 @@
-networks:
-  network1:
-    name: datafusion-network
-    attachable: true
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.18.0.0/16
-          ip_range: 172.18.5.0/24
-          gateway: 172.18.0.1
-
 services:
   datafusion:
     build: .
@@ -38,5 +27,3 @@ services:
     # security_opt:
     #   - seccomp:unconfined
     entrypoint: [ "zsh", "-c", "while sleep 1000; do :; done" ]
-    networks:
-      - network1
