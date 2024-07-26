@@ -10,7 +10,7 @@ networks:
           gateway: 172.18.0.1
 
 services:
-  txn:
+  datafusion:
     build: .
     volumes:
       - ../:/datafusion
