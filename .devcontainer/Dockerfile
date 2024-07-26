@@ -43,10 +43,13 @@ RUN arch="$(uname -m)" && \
 # - sccache used to speed up cargo builds
 # - mold used to speed up linking
 # - vim because, well, vi
+# - protobuf-compiler for proto file compilation
+# - pkg-config, libssl-dev required for build
+# - npm - required to run prettier
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
     apt-get -y upgrade && \
-    apt-get -y install unzip libxext6 libxext-dev libxtst-dev libxi-dev freetype* procps gdb build-essential clang libc6-dev musl-tools sccache mold vim && \
+    apt-get -y install unzip libxext6 libxext-dev libxtst-dev libxi-dev freetype* procps gdb build-essential clang libc6-dev musl-tools sccache mold vim protobuf-compiler pkg-config libssl-dev npm && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
