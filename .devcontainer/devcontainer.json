@@ -1,0 +1,23 @@
+{
+  "name": "datafusion",
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "datafusion",
+  "runServices": [
+    "datafusion"
+  ],
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "~/.aws.sh && ~/.ssh.sh",
+  "workspaceFolder": "/datafusion",
+  // "overrideCommand": "",
+  "customizations": {
+    "jetbrains": {
+      "backend": "RustRover",
+      "settings": {
+        // rustrover doesn't seem to have any settings available that I could find right now
+        // ideally, we would change the linter to clippy here among other things
+      },
+    }
+  }
+}

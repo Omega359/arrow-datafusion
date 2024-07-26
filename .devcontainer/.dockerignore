@@ -1,0 +1,9 @@
+.aws.sh
+.dockerignore
+.ssh.sh
+.welcome.sh
+.zshrc-specific
+devcontainer.json
+docker-compose.yml
+Dockerfile
+README.md

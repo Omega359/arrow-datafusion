@@ -1,0 +1,42 @@
+networks:
+  network1:
+    name: datafusion-network
+    attachable: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.18.0.0/16
+          ip_range: 172.18.5.0/24
+          gateway: 172.18.0.1
+
+services:
+  txn:
+    build: .
+    volumes:
+      - ../:/datafusion
+      # Docker socket to access Docker server
+      - /var/run/docker.sock:/var/run/docker.sock
+      # SSH directory for Linux, OSX and WSL
+      # On Linux and OSX, a symlink /mnt/ssh <-> ~/.ssh is
+      # created in the container. On Windows, files are copied
+      # from /mnt/ssh to ~/.ssh to fix permissions.
+      - ~/.ssh:/mnt/ssh
+      # aws directory for Linux, OSX and WSL
+      # On Linux and OSX, a symlink /mnt/aws <-> ~/.aws is
+      # created in the container. On Windows, files are copied
+      # from /mnt/aws to ~/.aws to fix permissions.
+      - ~/.aws:/mnt/aws
+      # Shell history persistence
+      #- ~/.zsh_history:/root/.zsh_history
+      # Git config
+      - ~/.gitconfig:/root/.gitconfig
+    environment:
+      - TZ=
+    # Needed for debugging
+    # cap_add:
+    #   - SYS_PTRACE
+    # security_opt:
+    #   - seccomp:unconfined
+    entrypoint: [ "zsh", "-c", "while sleep 1000; do :; done" ]
+    networks:
+      - network1
