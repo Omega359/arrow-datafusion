@@ -32,7 +32,7 @@ LABEL \
     org.opencontainers.image.source="https://github.com/qdm12/rustdevcontainer" \
     org.opencontainers.image.title="Rust Debian Dev container" \
     org.opencontainers.image.description="Rust development container"
-WORKDIR /datafusion
+WORKDIR /apache_datafusion
 
 # Install Rust for the correct CPU architecture
 ARG RUST_VERSION=1.80.0

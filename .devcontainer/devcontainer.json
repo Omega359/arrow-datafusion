@@ -25,7 +25,7 @@
   ],
   "shutdownAction": "stopCompose",
   "postCreateCommand": "~/.aws.sh && ~/.ssh.sh",
-  "workspaceFolder": "/datafusion",
+  "workspaceFolder": "/apache_datafusion",
   // "overrideCommand": "",
   "customizations": {
     "jetbrains": {

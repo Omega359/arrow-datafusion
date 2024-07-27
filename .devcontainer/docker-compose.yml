@@ -19,7 +19,7 @@ services:
   datafusion:
     build: .
     volumes:
-      - ../:/datafusion
+      - ../:/apache_datafusion
       # Docker socket to access Docker server
       - /var/run/docker.sock:/var/run/docker.sock
       # SSH directory for Linux, OSX and WSL
