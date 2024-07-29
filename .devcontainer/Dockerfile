@@ -70,13 +70,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Install awscli
-RUN arch="$(uname -m)" && \
-    wget -qO /tmp/awscli.zip "https://awscli.amazonaws.com/awscli-exe-linux-${arch}.zip" && \
-    unzip /tmp/awscli.zip -d /tmp/ && \
-    /tmp/aws/install && \
-    rm -rf /tmp/aws /tmp/awscli.zip
-
 # Install Rust tooling
 ARG RUST_ANALYZER_VERSION=2024-07-01
 RUN wget -qO- "https://github.com/rust-analyzer/rust-analyzer/releases/download/${RUST_ANALYZER_VERSION}/rust-analyzer-$(uname -m)-unknown-linux-gnu.gz" | \
@@ -86,7 +79,7 @@ RUN rustup component add clippy rustfmt
 RUN rustup component add llvm-tools-preview
 
 # Shell setup
-COPY .zshrc-specific .welcome.sh .ssh.sh .aws.sh /root/
-RUN chmod 750 ~/.ssh.sh && chmod 750 ~/.aws.sh && mkdir ~/.zfunc && rustup completions zsh > ~/.zfunc/_rustup && mkdir -p ~/.ssh && chmod 600 ~/.ssh
+COPY .zshrc-specific .welcome.sh .ssh.sh /root/
+RUN mkdir ~/.zfunc && rustup completions zsh > ~/.zfunc/_rustup && mkdir -p ~/.ssh && chmod 600 ~/.ssh
 
 

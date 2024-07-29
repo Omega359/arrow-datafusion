@@ -24,7 +24,7 @@
     "datafusion"
   ],
   "shutdownAction": "stopCompose",
-  "postCreateCommand": "~/.aws.sh && ~/.ssh.sh",
+  "postCreateCommand": "~/.ssh.sh",
   "workspaceFolder": "/apache_datafusion",
   // "overrideCommand": "",
   "customizations": {

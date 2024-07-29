@@ -27,11 +27,6 @@ services:
       # created in the container. On Windows, files are copied
       # from /mnt/ssh to ~/.ssh to fix permissions.
       - ~/.ssh:/mnt/ssh
-      # aws directory for Linux, OSX and WSL
-      # On Linux and OSX, a symlink /mnt/aws <-> ~/.aws is
-      # created in the container. On Windows, files are copied
-      # from /mnt/aws to ~/.aws to fix permissions.
-      - ~/.aws:/mnt/aws
       # Shell history persistence
       #- ~/.zsh_history:/root/.zsh_history
       # Git config

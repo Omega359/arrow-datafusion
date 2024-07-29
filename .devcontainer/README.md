@@ -34,7 +34,7 @@ podman.
 1. Create the following files on your host if you don't have them:
 
     ```shell
-    touch ~/.gitconfig ~/.zsh_history ~/.aws
+    touch ~/.gitconfig ~/.zsh_history
     ```
 1. Configure git ssh url rewrite in ~/.gitconfig on your host by adding the following:
    ```shell
@@ -49,8 +49,7 @@ podman.
    Project and enter the git url for this repository in the `git repository:` field. VSCode should also work but is
    untested.
 1. RustRover/IntelliJ will proceed to build the container and run it. Note that the docker-compose.yml mounts the ~/.ssh
-   and ~/.aws into the container so that git and aws commands will function correctly (assuming they work on your local
-   machine).
+into the container so that git commands will function correctly (assuming they work on your local machine).
 
 ## Customization
 
