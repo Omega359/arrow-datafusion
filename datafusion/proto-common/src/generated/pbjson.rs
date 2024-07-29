@@ -4642,6 +4642,97 @@ impl<'de> serde::Deserialize<'de> for Map {
         deserializer.deserialize_struct("datafusion_common.Map", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for NdJsonFormat {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.options.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.NdJsonFormat", len)?;
+        if let Some(v) = self.options.as_ref() {
+            struct_ser.serialize_field("options", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NdJsonFormat {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "options",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Options,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "options" => Ok(GeneratedField::Options),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NdJsonFormat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.NdJsonFormat")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<NdJsonFormat, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut options__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Options => {
+                            if options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("options"));
+                            }
+                            options__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(NdJsonFormat {
+                    options: options__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.NdJsonFormat", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ParquetFormat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -4780,6 +4871,9 @@ impl serde::Serialize for ParquetOptions {
         if self.bloom_filter_on_write {
             len += 1;
         }
+        if self.schema_force_string_view {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -4862,6 +4956,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.bloom_filter_on_write {
             struct_ser.serialize_field("bloomFilterOnWrite", &self.bloom_filter_on_write)?;
+        }
+        if self.schema_force_string_view {
+            struct_ser.serialize_field("schemaForceStringView", &self.schema_force_string_view)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -4980,6 +5077,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "bloomFilterOnRead",
             "bloom_filter_on_write",
             "bloomFilterOnWrite",
+            "schema_force_string_view",
+            "schemaForceStringView",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5021,6 +5120,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaximumBufferedRecordBatchesPerStream,
             BloomFilterOnRead,
             BloomFilterOnWrite,
+            SchemaForceStringView,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5068,6 +5168,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
                             "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
+                            "schemaForceStringView" | "schema_force_string_view" => Ok(GeneratedField::SchemaForceStringView),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5113,6 +5214,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut maximum_buffered_record_batches_per_stream__ = None;
                 let mut bloom_filter_on_read__ = None;
                 let mut bloom_filter_on_write__ = None;
+                let mut schema_force_string_view__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5214,6 +5316,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             bloom_filter_on_write__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::SchemaForceStringView => {
+                            if schema_force_string_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schemaForceStringView"));
+                            }
+                            schema_force_string_view__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -5314,6 +5422,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
                     bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
+                    schema_force_string_view: schema_force_string_view__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

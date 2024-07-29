@@ -49,6 +49,12 @@ pub struct ParquetFormat {
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NdJsonFormat {
+    #[prost(message, optional, tag = "1")]
+    pub options: ::core::option::Option<JsonOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
     pub indices: ::prost::alloc::vec::Vec<u64>,
@@ -799,6 +805,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "27")]
     pub bloom_filter_on_write: bool,
+    /// default = false
+    #[prost(bool, tag = "28")]
+    pub schema_force_string_view: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
