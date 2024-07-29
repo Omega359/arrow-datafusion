@@ -80,6 +80,6 @@ RUN rustup component add llvm-tools-preview
 
 # Shell setup
 COPY .zshrc-specific .welcome.sh .ssh.sh /root/
-RUN mkdir ~/.zfunc && rustup completions zsh > ~/.zfunc/_rustup && mkdir -p ~/.ssh && chmod 600 ~/.ssh
+RUN chmod 750 ~/.ssh.sh && mkdir ~/.zfunc && rustup completions zsh > ~/.zfunc/_rustup && mkdir -p ~/.ssh && chmod 600 ~/.ssh
 
 
