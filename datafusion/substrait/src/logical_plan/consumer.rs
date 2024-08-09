@@ -30,8 +30,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
-    EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
+    ExprSchemable, LogicalPlan, Operator, Projection, Values,
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
@@ -67,7 +67,6 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
@@ -418,7 +417,7 @@ pub async fn from_substrait_rel(
                     }
                     // Ensure the expression has a unique display name, so that project's
                     // validate_unique_names doesn't fail
-                    let name = x.display_name()?;
+                    let name = x.schema_name().to_string();
                     let mut new_name = name.clone();
                     let mut i = 0;
                     while names.contains(&new_name) {
@@ -1004,11 +1003,6 @@ pub async fn from_substrait_agg_func(
 
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
-        )))
-    } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
-    {
-        Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
     } else {
         not_impl_err!(

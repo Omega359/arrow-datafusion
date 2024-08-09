@@ -20,7 +20,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, sum_udaf};
+use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
 use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -209,7 +209,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j1\
         \n    TableScan: j2";
 
-    assert_eq!(format!("{plan_roundtrip:?}"), expected);
+    assert_eq!(format!("{plan_roundtrip}"), expected);
 
     Ok(())
 }
@@ -295,7 +295,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             sql: "SELECT string_count FROM (
                     SELECT
                         j1_id,
-                        MIN(j2_string)
+                        min(j2_string)
                     FROM
                         j1 LEFT OUTER JOIN j2 ON
                                     j1_id = j2_id
@@ -303,7 +303,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                         j1_id
                 ) AS agg (id, string_count)
             ",
-            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, MIN(j2.j2_string) FROM j1 LEFT JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
@@ -373,6 +373,38 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
+        // Test query that has calculation in derived table with columns
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        // Test query that has limit/distinct/order in derived table with columns
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        }
     ];
 
     for query in tests {
@@ -381,7 +413,9 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             .parse_statement()?;
 
         let context = MockContextProvider::default()
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_udaf(max_udaf())
+            .with_udaf(min_udaf());
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel
             .sql_statement_to_plan(statement)
@@ -413,12 +447,12 @@ fn test_unnest_logical_plan() -> Result<()> {
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
-    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
-        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-        \n      TableScan: unnest_table";
+    let expected = "Projection: UNNEST(unnest_table.struct_col).field1, UNNEST(unnest_table.struct_col).field2, UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+    \n  Unnest: lists[UNNEST(unnest_table.array_col)] structs[UNNEST(unnest_table.struct_col)]\
+    \n    Projection: unnest_table.struct_col AS UNNEST(unnest_table.struct_col), unnest_table.array_col AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+    \n      TableScan: unnest_table";
 
-    assert_eq!(format!("{plan:?}"), expected);
+    assert_eq!(format!("{plan}"), expected);
 
     Ok(())
 }
@@ -447,6 +481,30 @@ fn test_table_references_in_plan_to_sql() {
         "table",
         "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
     );
+}
+
+#[test]
+fn test_table_scan_with_no_projection_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+
+        let plan = table_scan(Some(table_name), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test(
+        "catalog.schema.table",
+        "SELECT * FROM catalog.\"schema\".\"table\"",
+    );
+    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
+    test("table", "SELECT * FROM \"table\"");
 }
 
 #[test]
@@ -522,4 +580,35 @@ fn test_pretty_roundtrip() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn sql_round_trip(query: &str, expect: &str) {
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(query)
+        .unwrap()
+        .parse_statement()
+        .unwrap();
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan).unwrap();
+    assert_eq!(roundtrip_statement.to_string(), expect);
+}
+
+#[test]
+fn test_interval_lhs_eq() {
+    sql_round_trip(
+        "select interval '2 seconds' = interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
+}
+
+#[test]
+fn test_interval_lhs_lt() {
+    sql_round_trip(
+        "select interval '2 seconds' < interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
 }
