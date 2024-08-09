@@ -17,7 +17,9 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod consts;
 mod struct_builder;
+
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -1007,6 +1009,123 @@ impl ScalarValue {
         }
     }
 
+    /// Returns a [`ScalarValue`] representing PI
+    pub fn new_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
+            DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
+            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI's upper bound
+    pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
+        // TODO: replace the constants with next_up/next_down when
+        // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
+            _ => {
+                _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI's lower bound
+    pub fn new_negative_pi_lower(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
+            _ => {
+                _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing FRAC_PI_2's upper bound
+    pub fn new_frac_pi_2_upper(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
+            _ => {
+                _internal_err!(
+                    "PI_UPPER/2 is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
+    // Returns a [`ScalarValue`] representing FRAC_PI_2's lower bound
+    pub fn new_neg_frac_pi_2_lower(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => {
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
+            }
+            DataType::Float64 => {
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
+            }
+            _ => {
+                _internal_err!(
+                    "-PI/2_LOWER is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI
+    pub fn new_negative_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
+            DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
+            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI/2
+    pub fn new_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
+            DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
+            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI/2
+    pub fn new_neg_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
+            DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
+            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing infinity
+    pub fn new_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
+            DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
+            _ => {
+                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing negative infinity
+    pub fn new_neg_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(f32::NEG_INFINITY)),
+            DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
+            _ => {
+                _internal_err!(
+                    "Negative Infinity is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
     /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
         Ok(match datatype {
@@ -1063,7 +1182,6 @@ impl ScalarValue {
 
     /// Create an one value in the given type.
     pub fn new_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(1)),
             DataType::Int16 => ScalarValue::Int16(Some(1)),
@@ -1086,7 +1204,6 @@ impl ScalarValue {
 
     /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
             DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
@@ -1104,7 +1221,6 @@ impl ScalarValue {
     }
 
     pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(10)),
             DataType::Int16 => ScalarValue::Int16(Some(10)),
@@ -1682,8 +1798,10 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8View => build_array_string!(StringViewArray, Utf8View),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
+            DataType::BinaryView => build_array_string!(BinaryViewArray, BinaryView),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
@@ -1771,6 +1889,7 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -1839,10 +1958,7 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
-            | DataType::Utf8View
-            | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
                 return _internal_err!(
@@ -2678,7 +2794,10 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)?
             }
-
+            DataType::Map(_, _) => {
+                let a = array.slice(index, 1);
+                Self::Map(Arc::new(a.as_map().to_owned()))
+            }
             other => {
                 return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
@@ -5692,16 +5811,12 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
 
-        // needs https://github.com/apache/arrow-rs/issues/5893
-        /*
         check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8View);
         check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8View);
         check_scalar_cast(
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
-
-         */
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`

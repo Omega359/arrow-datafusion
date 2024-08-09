@@ -45,7 +45,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion_functions_array::range::range_udf;
+use datafusion_functions_nested::range::range_udf;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -139,7 +139,7 @@ async fn scalar_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{plan:?}"),
+        format!("{plan}"),
         "Projection: t.a, t.b, my_add(t.a, t.b)\n  TableScan: t projection=[a, b]"
     );
 
@@ -393,7 +393,7 @@ async fn udaf_as_window_func() -> Result<()> {
     TableScan: my_table"#;
 
     let dataframe = context.sql(sql).await.unwrap();
-    assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
+    assert_eq!(format!("{}", dataframe.logical_plan()), expected);
     Ok(())
 }
 
@@ -941,11 +941,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
 
 /// Saves whatever is passed to it as a scalar function
 #[derive(Debug, Default)]
-struct RecordingFunctonFactory {
+struct RecordingFunctionFactory {
     calls: Mutex<Vec<CreateFunction>>,
 }
 
-impl RecordingFunctonFactory {
+impl RecordingFunctionFactory {
     fn new() -> Self {
         Self::default()
     }
@@ -957,7 +957,7 @@ impl RecordingFunctonFactory {
 }
 
 #[async_trait::async_trait]
-impl FunctionFactory for RecordingFunctonFactory {
+impl FunctionFactory for RecordingFunctionFactory {
     async fn create(
         &self,
         _state: &SessionState,
@@ -972,7 +972,7 @@ impl FunctionFactory for RecordingFunctonFactory {
 
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<()> {
-    let function_factory = Arc::new(RecordingFunctonFactory::new());
+    let function_factory = Arc::new(RecordingFunctionFactory::new());
     let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
     let sql = r#"
@@ -1124,7 +1124,7 @@ async fn test_parameterized_scalar_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{plan:?}"),
+        format!("{plan}"),
         "Filter: t.text IS NOT NULL\n  Filter: regex_udf(t.text) AND regex_udf(t.text)\n    TableScan: t projection=[text]"
     );
 

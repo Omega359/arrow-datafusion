@@ -32,7 +32,7 @@ use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
-use sqlparser::ast::Ident;
+use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -263,11 +263,58 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
+pub(crate) fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::DoubleQuotedString(_)
+        | Value::EscapedStringLiteral(_)
+        | Value::NationalStringLiteral(_)
+        | Value::SingleQuotedByteStringLiteral(_)
+        | Value::DoubleQuotedByteStringLiteral(_)
+        | Value::TripleSingleQuotedString(_)
+        | Value::TripleDoubleQuotedString(_)
+        | Value::TripleSingleQuotedByteStringLiteral(_)
+        | Value::TripleDoubleQuotedByteStringLiteral(_)
+        | Value::SingleQuotedRawStringLiteral(_)
+        | Value::DoubleQuotedRawStringLiteral(_)
+        | Value::TripleSingleQuotedRawStringLiteral(_)
+        | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::HexStringLiteral(_)
+        | Value::Null
+        | Value::Placeholder(_) => None,
+    }
+}
+
+pub(crate) fn transform_bottom_unnests(
+    input: &LogicalPlan,
+    unnest_placeholder_columns: &mut Vec<String>,
+    inner_projection_exprs: &mut Vec<Expr>,
+    original_exprs: &[Expr],
+) -> Result<Vec<Expr>> {
+    Ok(original_exprs
+        .iter()
+        .map(|expr| {
+            transform_bottom_unnest(
+                input,
+                unnest_placeholder_columns,
+                inner_projection_exprs,
+                expr,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>())
+}
+
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
 /// - For list column: unnest(col) with type list -> unnest(col) with type list::item
 /// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
+///
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression
@@ -282,7 +329,7 @@ pub(crate) fn transform_bottom_unnest(
             // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
             // inside unnest execution, each column inside the inner projection
             // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-            let placeholder_name = unnest_expr.display_name()?;
+            let placeholder_name = unnest_expr.schema_name().to_string();
 
             unnest_placeholder_columns.push(placeholder_name.clone());
             // Add alias for the argument expression, to avoid naming conflicts
@@ -325,7 +372,7 @@ pub(crate) fn transform_bottom_unnest(
             let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
 
             if let DataType::Struct(_) = data_type {
-                return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                return internal_err!("unnest on struct can only be applied at the root level of select expression");
             }
 
             let mut transformed_exprs = transform(&expr, arg)?;
@@ -355,7 +402,7 @@ pub(crate) fn transform_bottom_unnest(
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
-            let column_name = transformed_expr.display_name()?;
+            let column_name = transformed_expr.schema_name().to_string();
             inner_projection_exprs.push(transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
@@ -422,16 +469,16 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                col("unnest(struct_col).field1"),
-                col("unnest(struct_col).field2"),
+                col("UNNEST(struct_col).field1"),
+                col("UNNEST(struct_col).field2"),
             ]
         );
-        assert_eq!(unnest_placeholder_columns, vec!["unnest(struct_col)"]);
+        assert_eq!(unnest_placeholder_columns, vec!["UNNEST(struct_col)"]);
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col").alias("unnest(struct_col)"),]
+            vec![col("struct_col").alias("UNNEST(struct_col)"),]
         );
 
         // unnest(array_col) + 1
@@ -444,12 +491,12 @@ mod tests {
         )?;
         assert_eq!(
             unnest_placeholder_columns,
-            vec!["unnest(struct_col)", "unnest(array_col)"]
+            vec!["UNNEST(struct_col)", "UNNEST(array_col)"]
         );
         // only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("unnest(array_col)").add(lit(1i64))]
+            vec![col("UNNEST(array_col)").add(lit(1i64))]
         );
 
         // keep appending to the current vector
@@ -458,8 +505,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("struct_col").alias("unnest(struct_col)"),
-                col("array_col").alias("unnest(array_col)")
+                col("struct_col").alias("UNNEST(struct_col)"),
+                col("array_col").alias("UNNEST(array_col)")
             ]
         );
 
@@ -506,17 +553,17 @@ mod tests {
         // Only the inner most/ bottom most unnest is transformed
         assert_eq!(
             transformed_exprs,
-            vec![unnest(col("unnest(struct_col[matrix])"))]
+            vec![unnest(col("UNNEST(struct_col[matrix])"))]
         );
         assert_eq!(
             unnest_placeholder_columns,
-            vec!["unnest(struct_col[matrix])"]
+            vec!["UNNEST(struct_col[matrix])"]
         );
         assert_eq!(
             inner_projection_exprs,
             vec![col("struct_col")
                 .field("matrix")
-                .alias("unnest(struct_col[matrix])"),]
+                .alias("UNNEST(struct_col[matrix])"),]
         );
 
         Ok(())

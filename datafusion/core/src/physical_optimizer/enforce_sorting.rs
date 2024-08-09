@@ -20,6 +20,7 @@
 //! - Adds a [`SortExec`] when a requirement is not met,
 //! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
+//!
 //! The rule can work on valid *and* invalid physical plans with respect to
 //! sorting requirements, but always produces a valid physical plan in this sense.
 //!
@@ -49,7 +50,6 @@ use crate::physical_optimizer::utils::{
     is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
     is_union, is_window,
 };
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -66,6 +66,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -620,6 +621,7 @@ mod tests {
         limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
+        RequirementsTestExec,
     };
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
@@ -631,6 +633,7 @@ mod tests {
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 
+    use datafusion_physical_optimizer::PhysicalOptimizerRule;
     use rstest::rstest;
 
     fn create_test_schema() -> Result<SchemaRef> {
@@ -2342,6 +2345,69 @@ mod tests {
         ];
         let expected_no_change = expected_input;
         assert_optimized!(expected_input, expected_no_change, physical_plan, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
+        // SortExec: expr=[b]            <-- can't push this down
+        //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
+        //    SortExec: expr=[a]
+        //      MemoryExec
+        let schema = create_test_schema3()?;
+        let sort_exprs_a = vec![sort_expr("a", &schema)];
+        let sort_exprs_b = vec![sort_expr("b", &schema)];
+        let plan = memory_exec(&schema);
+        let plan = sort_exec(sort_exprs_a.clone(), plan);
+        let plan = RequirementsTestExec::new(plan)
+            .with_required_input_ordering(sort_exprs_a)
+            .with_maintains_input_order(true)
+            .into_arc();
+        let plan = sort_exec(sort_exprs_b, plan);
+
+        let expected_input = [
+            "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
+            "  RequiredInputOrderingExec",
+            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        // should not be able to push shorts
+        let expected_no_change = expected_input;
+        assert_optimized!(expected_input, expected_no_change, plan, true);
+        Ok(())
+    }
+
+    // test when the required input ordering is satisfied so could push through
+    #[tokio::test]
+    async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
+        // SortExec: expr=[a,b]          <-- can push this down (as it is compatible with the required input ordering)
+        //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
+        //    SortExec: expr=[a]
+        //      MemoryExec
+        let schema = create_test_schema3()?;
+        let sort_exprs_a = vec![sort_expr("a", &schema)];
+        let sort_exprs_ab = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+        let plan = memory_exec(&schema);
+        let plan = sort_exec(sort_exprs_a.clone(), plan);
+        let plan = RequirementsTestExec::new(plan)
+            .with_required_input_ordering(sort_exprs_a)
+            .with_maintains_input_order(true)
+            .into_arc();
+        let plan = sort_exec(sort_exprs_ab, plan);
+
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC,b@1 ASC], preserve_partitioning=[false]",
+            "  RequiredInputOrderingExec",
+            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        // should able to push shorts
+        let expected = [
+            "RequiredInputOrderingExec",
+            "  SortExec: expr=[a@0 ASC,b@1 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected, plan, true);
         Ok(())
     }
 }

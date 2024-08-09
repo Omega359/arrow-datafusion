@@ -145,15 +145,6 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window aggregate function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::AggregateFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
                     proto_error(format!(
@@ -164,8 +155,10 @@ pub fn parse_physical_window_expr(
                 WindowFunctionDefinition::BuiltInWindowFunction(f.into())
             }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
-                let agg_udf = registry.udaf(udaf_name)?;
-                WindowFunctionDefinition::AggregateUDF(agg_udf)
+                WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
+                    None => registry.udaf(udaf_name)?
+                })
             }
         }
     } else {
@@ -365,7 +358,7 @@ pub fn parse_physical_expr(
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
                 None => registry.udf(e.name.as_str())?,
             };
-            let scalar_fun_def = udf.clone();
+            let scalar_fun_def = Arc::clone(&udf);
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 

@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{FileFormat, FileFormatFactory, FileScanConfig};
+use super::{transform_schema_to_view, FileFormat, FileFormatFactory, FileScanConfig};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -50,7 +50,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 
@@ -75,12 +75,11 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::{
-    ParquetExecBuilder, StatisticsConverter,
-};
+use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -93,7 +92,8 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
 pub struct ParquetFormatFactory {
-    options: Option<TableParquetOptions>,
+    /// inner options for parquet
+    pub options: Option<TableParquetOptions>,
 }
 
 impl ParquetFormatFactory {
@@ -140,6 +140,10 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for ParquetFormatFactory {
@@ -149,6 +153,13 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
+impl fmt::Debug for ParquetFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetFormatFactory")
+            .field("ParquetFormatFactory", &self.options)
+            .finish()
+    }
+}
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
@@ -304,6 +315,17 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = if state
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view
+        {
+            transform_schema_to_view(&schema)
+        } else {
+            schema
+        };
 
         Ok(Arc::new(schema))
     }
@@ -854,14 +876,14 @@ fn spawn_column_parallel_row_group_writer(
     let mut col_array_channels = Vec::with_capacity(num_columns);
     for writer in col_writers.into_iter() {
         // Buffer size of this channel limits the number of arrays queued up for column level serialization
-        let (send_array, recieve_array) =
+        let (send_array, receive_array) =
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
 
         let reservation =
             MemoryConsumer::new("ParquetSink(ArrowColumnWriter)").register(pool);
         let task = SpawnedTask::spawn(column_serializer_task(
-            recieve_array,
+            receive_array,
             writer,
             reservation,
         ));
@@ -936,7 +958,7 @@ fn spawn_rg_join_and_finalize_task(
 /// row group is reached, the parallel tasks are joined on another separate task
 /// and sent to a concatenation task. This task immediately continues to work
 /// on the next row group in parallel. So, parquet serialization is parallelized
-/// accross both columns and row_groups, with a theoretical max number of parallel tasks
+/// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
     mut data: Receiver<RecordBatch>,
@@ -1310,7 +1332,7 @@ mod tests {
             .map(|i| i.to_string())
             .collect();
         let coll: Vec<_> = schema
-            .all_fields()
+            .flattened_fields()
             .into_iter()
             .map(|i| i.name().to_string())
             .collect();
@@ -1560,7 +1582,7 @@ mod tests {
         // . batch1 written into first file and includes:
         //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
         // . batch2 written into second file and includes:
-        //    - column c2 that has 3 rows with one null. Stats min and max of int are avaialble and 1 and 2 respectively
+        //    - column c2 that has 3 rows with one null. Stats min and max of int are available and 1 and 2 respectively
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
@@ -2112,7 +2134,7 @@ mod tests {
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(path_parts.len(), 1, "should not have path prefix");
 
-        assert_eq!(num_rows, 2, "file metdata to have 2 rows");
+        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
         assert!(
             schema.iter().any(|col_schema| col_schema.name == "a"),
             "output file metadata should contain col a"
@@ -2208,7 +2230,7 @@ mod tests {
             );
             expected_partitions.remove(prefix);
 
-            assert_eq!(num_rows, 1, "file metdata to have 1 row");
+            assert_eq!(num_rows, 1, "file metadata to have 1 row");
             assert!(
                 !schema.iter().any(|col_schema| col_schema.name == "a"),
                 "output file metadata will not contain partitioned col a"

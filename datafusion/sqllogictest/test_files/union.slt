@@ -22,7 +22,7 @@
 statement ok
 CREATE TABLE t1(
   id INT,  
-  name TEXT,
+  name TEXT
 ) as VALUES
   (1, 'Alex'), 
   (2, 'Bob'), 
@@ -32,7 +32,7 @@ CREATE TABLE t1(
 statement ok
 CREATE TABLE t2(
   id TINYINT,
-  name TEXT,
+  name TEXT
 ) as VALUES
   (1, 'Alex'), 
   (2, 'Bob'), 
@@ -406,15 +406,16 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--SortPreservingMergeExec: [c9@1 DESC], fetch=5
-03)----UnionExec
-04)------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
-05)--------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
-08)------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
-09)--------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
-10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
+03)----LocalLimitExec: fetch=5
+04)------UnionExec
+05)--------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+06)----------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
+09)--------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+10)----------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
+11)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 query TI
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
@@ -587,8 +588,8 @@ logical_plan
 06)----------EmptyRelation
 07)--Projection: b.x AS count, b.y AS n
 08)----SubqueryAlias: b
-09)------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
-10)--------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
+09)------Projection: Int64(1) AS x, max(Int64(10)) AS y
+10)--------Aggregate: groupBy=[[]], aggr=[[max(Int64(10))]]
 11)----------EmptyRelation
 physical_plan
 01)UnionExec
@@ -599,6 +600,51 @@ physical_plan
 06)----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
 07)------------ProjectionExec: expr=[5 as n]
 08)--------------PlaceholderRowExec
-09)--ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
-10)----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+09)--ProjectionExec: expr=[1 as count, max(Int64(10))@0 as n]
+10)----AggregateExec: mode=Single, gby=[], aggr=[max(Int64(10))]
 11)------PlaceholderRowExec
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11409
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 BIGINT, v2 BIGINT, v3 BOOLEAN);
+
+statement ok
+CREATE TABLE t2(v0 DOUBLE);
+
+query I
+INSERT INTO t1(v0, v2, v1) VALUES (-1229445667, -342312412, -1507138076);
+----
+1
+
+query I
+INSERT INTO t1(v0, v1) VALUES (1541512604, -1229445667);
+----
+1
+
+query I
+INSERT INTO t1(v1, v3, v0, v2) VALUES (-1020641465, false, -1493773377, 1751276473);
+----
+1
+
+query I
+INSERT INTO t1(v3) VALUES (true), (true), (false);
+----
+3
+
+query I
+INSERT INTO t2(v0) VALUES (0.28014577292925047);
+----
+1
+
+query II
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1
+    UNION ALL
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1 WHERE (t1.v2 IS NULL);
+----
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

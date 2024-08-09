@@ -28,7 +28,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -433,22 +433,13 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .clone()
             .transform_up(|expr| {
                 let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction {
-                        func_def, ..
-                    }) => match func_def {
-                        AggregateFunctionDefinition::BuiltIn(_fun) => {
+                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
+                        if func.name() == "count" {
+                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                        } else {
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
-                        AggregateFunctionDefinition::UDF(fun) => {
-                            if fun.name() == "count" {
-                                Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
-                                    0,
-                                ))))
-                            } else {
-                                Transformed::yes(Expr::Literal(ScalarValue::Null))
-                            }
-                        }
-                    },
+                    }
                     _ => Transformed::no(expr),
                 };
                 Ok(new_expr)
@@ -461,7 +452,8 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug.insert(e.display_name()?, result_expr);
+            expr_result_map_for_count_bug
+                .insert(e.schema_name().to_string(), result_expr);
         }
     }
     Ok(())
@@ -499,7 +491,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let expr_name = match expr {
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
                 Expr::Column(Column { relation: _, name }) => name.to_string(),
-                _ => expr.display_name()?,
+                _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);
         }
@@ -555,8 +547,8 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                         )],
                         else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
                     });
-                    expr_result_map_for_count_bug
-                        .insert(new_expr.display_name()?, new_expr);
+                    let expr_key = new_expr.schema_name().to_string();
+                    expr_result_map_for_count_bug.insert(expr_key, new_expr);
                 }
                 None
             }

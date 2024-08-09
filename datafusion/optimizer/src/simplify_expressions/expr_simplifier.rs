@@ -32,9 +32,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{
-    AggregateFunctionDefinition, InList, InSubquery, WindowFunction,
-};
+use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
@@ -289,7 +287,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self
     }
 
-    /// Should [`Canonicalizer`] be applied before simplification?
+    /// Should `Canonicalizer` be applied before simplification?
     ///
     /// If true (the default), the expression will be rewritten to canonical
     /// form before simplification. This is useful to ensure that the simplifier
@@ -478,7 +476,7 @@ struct ConstEvaluator<'a> {
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
-    // Expr was simplifed and contains the new expression
+    // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
     // Expr was not simplified and original value is returned
     NotSimplified(ScalarValue),
@@ -519,7 +517,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
             // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evalute all their sub expressions. Thus if
+            // and may not evaluate all their sub expressions. Thus if
             // if any error is countered during simplification, return the original
             // so that normal evaluation can occur
             Some(true) => {
@@ -656,12 +654,35 @@ impl<'a> ConstEvaluator<'a> {
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
-                        Ok(s) => ConstSimplifyResult::Simplified(s),
+                        Ok(s) => {
+                            // TODO: support the optimization for `Map` type after support impl hash for it
+                            if matches!(&s, ScalarValue::Map(_)) {
+                                ConstSimplifyResult::SimplifyRuntimeError(
+                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
+                                    expr,
+                                )
+                            } else {
+                                ConstSimplifyResult::Simplified(s)
+                            }
+                        }
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
                     }
                 }
             }
-            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s),
+            ColumnarValue::Scalar(s) => {
+                // TODO: support the optimization for `Map` type after support impl hash for it
+                if matches!(&s, ScalarValue::Map(_)) {
+                    ConstSimplifyResult::SimplifyRuntimeError(
+                        DataFusionError::NotImplemented(
+                            "Const evaluate for Map type is still not supported"
+                                .to_string(),
+                        ),
+                        expr,
+                    )
+                } else {
+                    ConstSimplifyResult::Simplified(s)
+                }
+            }
         }
     }
 }
@@ -1385,9 +1406,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
 
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                func_def: AggregateFunctionDefinition::UDF(ref udaf),
+                ref func,
                 ..
-            }) => match (udaf.simplify(), expr) {
+            }) => match (func.simplify(), expr) {
                 (Some(simplify_function), Expr::AggregateFunction(af)) => {
                     Transformed::yes(simplify_function(af, info)?)
                 }
@@ -3832,15 +3853,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3848,15 +3863,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);

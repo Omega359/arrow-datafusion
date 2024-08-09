@@ -66,7 +66,7 @@ use parking_lot::Mutex;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+/// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///
@@ -145,7 +145,7 @@ impl JoinHashMap {
 pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
 
 // Macro for traversing chained values with limit.
-// Early returns in case of reacing output tuples limit.
+// Early returns in case of reaching output tuples limit.
 macro_rules! chain_traverse {
     (
         $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
@@ -477,7 +477,7 @@ fn offset_ordering(
     offset: usize,
 ) -> Vec<PhysicalSortExpr> {
     match join_type {
-        // In the case below, right ordering should be offseted with the left
+        // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
             .iter()
@@ -910,7 +910,7 @@ fn estimate_inner_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
 ) -> Option<Precision<usize>> {
-    // Immediatedly return if inputs considered as non-overlapping
+    // Immediately return if inputs considered as non-overlapping
     if let Some(estimation) = estimate_disjoint_inputs(&left_stats, &right_stats) {
         return Some(estimation);
     };
@@ -2419,7 +2419,7 @@ mod tests {
         );
         assert!(
             absent_outer_estimation.is_none(),
-            "Expected \"None\" esimated SemiJoin cardinality for absent outer num_rows"
+            "Expected \"None\" estimated SemiJoin cardinality for absent outer num_rows"
         );
 
         let absent_inner_estimation = estimate_join_cardinality(
@@ -2437,7 +2437,7 @@ mod tests {
             &join_on,
         ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
 
-        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows esimated SemiJoin cardinality for absent inner num_rows");
+        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows estimated SemiJoin cardinality for absent inner num_rows");
 
         let absent_inner_estimation = estimate_join_cardinality(
             &JoinType::LeftSemi,
@@ -2453,7 +2453,7 @@ mod tests {
             },
             &join_on,
         );
-        assert!(absent_inner_estimation.is_none(), "Expected \"None\" esimated SemiJoin cardinality for absent outer and inner num_rows");
+        assert!(absent_inner_estimation.is_none(), "Expected \"None\" estimated SemiJoin cardinality for absent outer and inner num_rows");
 
         Ok(())
     }

@@ -154,7 +154,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<Expr> {
         let mut exprs = values;
-        for planner in self.planners.iter() {
+        for planner in self.context_provider.get_expr_planners() {
             match planner.plan_array_literal(exprs, schema)? {
                 PlannerResult::Planned(expr) => {
                     return Ok(expr);
@@ -227,6 +227,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let df_op = match op {
                     BinaryOperator::Plus => Operator::Plus,
                     BinaryOperator::Minus => Operator::Minus,
+                    BinaryOperator::Eq => Operator::Eq,
+                    BinaryOperator::NotEq => Operator::NotEq,
+                    BinaryOperator::Gt => Operator::Gt,
+                    BinaryOperator::GtEq => Operator::GtEq,
+                    BinaryOperator::Lt => Operator::Lt,
+                    BinaryOperator::LtEq => Operator::LtEq,
                     _ => {
                         return not_impl_err!("Unsupported interval operator: {op:?}");
                     }
