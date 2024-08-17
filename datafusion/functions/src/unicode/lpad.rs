@@ -19,10 +19,7 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
-};
+use arrow::array::{Array, ArrayRef, GenericStringBuilder, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
@@ -32,7 +29,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{make_scalar_function, utf8_to_str_type, StringArrayType};
+use crate::utils::{make_scalar_function, utf8_to_str_type, Iter, StringArrays};
 
 #[derive(Debug)]
 pub struct LPadFunc {
@@ -110,70 +107,23 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let length_array = as_int64_array(&args[1])?;
 
     match (args.len(), args[0].data_type()) {
-        (2, Utf8View) => lpad_impl::<&StringViewArray, &GenericStringArray<i32>, T>(
-            args[0].as_string_view(),
+        (2, Utf8View | Utf8 | LargeUtf8) => {
+            lpad_impl::<T>(StringArrays::try_from(&args[0])?, length_array, None)
+        }
+        (3, Utf8View | Utf8 | LargeUtf8) => lpad_impl::<T>(
+            StringArrays::try_from(&args[0])?,
             length_array,
-            None,
-        ),
-        (2, Utf8 | LargeUtf8) => lpad_impl::<
-            &GenericStringArray<T>,
-            &GenericStringArray<T>,
-            T,
-        >(args[0].as_string::<T>(), length_array, None),
-        (3, Utf8View) => lpad_with_replace::<&StringViewArray, T>(
-            args[0].as_string_view(),
-            length_array,
-            &args[2],
-        ),
-        (3, Utf8 | LargeUtf8) => lpad_with_replace::<&GenericStringArray<T>, T>(
-            args[0].as_string::<T>(),
-            length_array,
-            &args[2],
+            Some(StringArrays::try_from(&args[2])?),
         ),
         (_, _) => unreachable!(),
     }
 }
 
-fn lpad_with_replace<'a, V, T: OffsetSizeTrait>(
-    string_array: V,
+fn lpad_impl<'a, T: OffsetSizeTrait>(
+    string_array: StringArrays,
     length_array: &Int64Array,
-    fill_array: &'a ArrayRef,
-) -> Result<ArrayRef>
-where
-    V: StringArrayType<'a>,
-{
-    match fill_array.data_type() {
-        Utf8View => lpad_impl::<V, &StringViewArray, T>(
-            string_array,
-            length_array,
-            Some(fill_array.as_string_view()),
-        ),
-        LargeUtf8 => lpad_impl::<V, &GenericStringArray<i64>, T>(
-            string_array,
-            length_array,
-            Some(fill_array.as_string::<i64>()),
-        ),
-        Utf8 => lpad_impl::<V, &GenericStringArray<i32>, T>(
-            string_array,
-            length_array,
-            Some(fill_array.as_string::<i32>()),
-        ),
-        other => {
-            exec_err!("Unsupported data type {other:?} for function lpad")
-        }
-    }
-}
-
-fn lpad_impl<'a, V, V2, T>(
-    string_array: V,
-    length_array: &Int64Array,
-    fill_array: Option<V2>,
-) -> Result<ArrayRef>
-where
-    V: StringArrayType<'a>,
-    V2: StringArrayType<'a>,
-    T: OffsetSizeTrait,
-{
+    fill_array: Option<StringArrays>,
+) -> Result<ArrayRef> {
     let array = if fill_array.is_none() {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
 
