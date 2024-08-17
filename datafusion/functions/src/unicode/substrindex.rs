@@ -28,7 +28,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::{make_scalar_function, utf8_to_str_type, Iter, StringArrays};
 
 #[derive(Debug)]
 pub struct SubstrIndexFunc {
@@ -98,63 +98,25 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     }
 
-    match args[0].data_type() {
-        DataType::Utf8 => {
-            let string_array = args[0].as_string::<i32>();
-            let delimiter_array = args[1].as_string::<i32>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
-            substr_index_general::<Int32Type, _, _>(
-                string_array,
-                delimiter_array,
-                count_array,
-            )
-        }
-        DataType::LargeUtf8 => {
-            let string_array = args[0].as_string::<i64>();
-            let delimiter_array = args[1].as_string::<i64>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
-            substr_index_general::<Int64Type, _, _>(
-                string_array,
-                delimiter_array,
-                count_array,
-            )
-        }
-        DataType::Utf8View => {
-            let string_array = args[0].as_string_view();
-            let delimiter_array = args[1].as_string_view();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
-            substr_index_general::<Int32Type, _, _>(
-                string_array,
-                delimiter_array,
-                count_array,
-            )
-        }
-        other => {
-            exec_err!("Unsupported data type {other:?} for function substr_index")
-        }
-    }
+    let string_array: StringArrays = StringArrays::try_from(&args[0])?;
+    let delimiter_array: StringArrays = StringArrays::try_from(&args[1])?;
+    let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+    substr_index_general::<Int32Type, _>(string_array, delimiter_array, count_array)
 }
 
-pub fn substr_index_general<
-    'a,
-    T: ArrowPrimitiveType,
-    V: ArrayAccessor<Item = &'a str>,
-    P: ArrayAccessor<Item = i64>,
->(
-    string_array: V,
-    delimiter_array: V,
+pub fn substr_index_general<T: ArrowPrimitiveType, P: ArrayAccessor<Item = i64>>(
+    string_array: StringArrays,
+    delimiter_array: StringArrays,
     count_array: P,
 ) -> Result<ArrayRef>
 where
     T::Native: OffsetSizeTrait,
 {
     let mut builder = StringBuilder::new();
-    let string_iter = ArrayIter::new(string_array);
-    let delimiter_array_iter = ArrayIter::new(delimiter_array);
-    let count_array_iter = ArrayIter::new(count_array);
-    string_iter
-        .zip(delimiter_array_iter)
-        .zip(count_array_iter)
+    string_array
+        .iter()
+        .zip(delimiter_array.iter())
+        .zip(ArrayIter::new(count_array))
         .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 // In MySQL, these cases will return an empty string.

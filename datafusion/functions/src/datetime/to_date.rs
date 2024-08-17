@@ -19,7 +19,7 @@ use std::any::Any;
 
 use arrow::array::types::Date32Type;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Date32;
+use arrow::datatypes::DataType::*;
 
 use crate::datetime::common::*;
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
@@ -105,13 +105,10 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32
-            | DataType::Int64
-            | DataType::Null
-            | DataType::Float64
-            | DataType::Date32
-            | DataType::Date64 => args[0].cast_to(&DataType::Date32, None),
-            DataType::Utf8 => self.to_date(args),
+            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
+                args[0].cast_to(&Date32, None)
+            }
+            Utf8View | Utf8 | LargeUtf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
             }

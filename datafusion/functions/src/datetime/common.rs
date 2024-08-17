@@ -17,17 +17,16 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-};
+use arrow::array::{Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
 use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Either;
+use DataType::*;
 
-use datafusion_common::cast::as_generic_string_array;
+use crate::utils::{Iter, StringArrays};
 use datafusion_common::{
     exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
 };
@@ -41,14 +40,15 @@ pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
-/// Checks that all the arguments from the second are of type [Utf8] or [LargeUtf8]
+/// Checks that all the arguments from the second are of type [Utf8View], [Utf8] or [LargeUtf8]
 ///
-/// [Utf8]: DataType::Utf8
-/// [LargeUtf8]: DataType::LargeUtf8
+/// [Utf8View]: Utf8View
+/// [Utf8]: Utf8
+/// [LargeUtf8]: LargeUtf8
 pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<()> {
     for (idx, a) in args.iter().skip(1).enumerate() {
         match a.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => {
+            Utf8View | Utf8 | LargeUtf8 => {
                 // all good
             }
             _ => {
@@ -165,14 +165,16 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
+            Utf8View | Utf8 | LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
+                unary_string_to_primitive_function::<O, _>(a, op)?,
             ))),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
+            ScalarValue::Utf8View(a)
+            | ScalarValue::Utf8(a)
+            | ScalarValue::LargeUtf8(a) => {
+                let result = a.as_ref().map(|x| op(x)).transpose()?;
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
@@ -180,7 +182,7 @@ where
     }
 }
 
-// given an function that maps a `&str`, `&str` to an arrow native type,
+// given a function that maps a `&str`, `&str` to an arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
 pub(crate) fn handle_multiple<'a, O, F, S, M>(
@@ -197,19 +199,19 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => {
+            Utf8View | Utf8 | LargeUtf8 => {
                 // validate the column types
                 for (pos, arg) in args.iter().enumerate() {
                     match arg {
                         ColumnarValue::Array(arg) => match arg.data_type() {
-                            DataType::Utf8 | DataType::LargeUtf8 => {
+                            Utf8View | Utf8 | LargeUtf8 => {
                                 // all good
                             }
                             other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
                         },
                         ColumnarValue::Scalar(arg) => {
                             match arg.data_type() {
-                                DataType::Utf8 | DataType::LargeUtf8 => {
+                                Utf8View | Utf8 | LargeUtf8 => {
                                     // all good
                                 }
                                 other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
@@ -219,7 +221,7 @@ where
                 }
 
                 Ok(ColumnarValue::Array(Arc::new(
-                    strings_to_primitive_function::<i32, O, _, _>(args, op, op2, name)?,
+                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?,
                 )))
             }
             other => {
@@ -228,7 +230,9 @@ where
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+            ScalarValue::Utf8View(a)
+            | ScalarValue::Utf8(a)
+            | ScalarValue::LargeUtf8(a) => {
                 let a = a.as_ref();
                 // ASK: Why do we trust `a` to be non-null at this point?
                 let a = unwrap_or_internal_err!(a);
@@ -237,7 +241,9 @@ where
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
                     let ColumnarValue::Scalar(
-                        ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                        ScalarValue::Utf8View(x)
+                        | ScalarValue::Utf8(x)
+                        | ScalarValue::LargeUtf8(x),
                     ) = v
                     else {
                         return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
@@ -274,9 +280,9 @@ where
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not > 1 or
-/// * the array arguments are not castable to a `GenericStringArray` or
+/// * the array arguments are not castable to a `GenericStringArray` or `StringViewArray` or
 /// * the function `op` errors for all input
-pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
+pub(crate) fn strings_to_primitive_function<'a, O, F, F2>(
     args: &'a [ColumnarValue],
     op: F,
     op2: F2,
@@ -284,7 +290,6 @@ pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
-    T: OffsetSizeTrait,
     F: Fn(&'a str, &'a str) -> Result<O::Native>,
     F2: Fn(O::Native) -> O::Native,
 {
@@ -296,25 +301,27 @@ where
         );
     }
 
-    // this will throw the error if any of the array args are not castable to GenericStringArray
+    // this will throw the error if any of the array args are not castable to GenericStringArray or StringViewArray
     let data = args
         .iter()
         .map(|a| match a {
-            ColumnarValue::Array(a) => {
-                Ok(Either::Left(as_generic_string_array::<T>(a.as_ref())?))
-            }
+            ColumnarValue::Array(a) => Ok(Either::Left(a)),
             ColumnarValue::Scalar(s) => match s {
-                ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
+                ScalarValue::Utf8View(a)
+                | ScalarValue::Utf8(a)
+                | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
                 other => exec_err!(
                     "Unexpected scalar type encountered '{other}' for function '{name}'"
                 ),
             },
         })
-        .collect::<Result<Vec<Either<&GenericStringArray<T>, &Option<String>>>>>()?;
+        .collect::<Result<Vec<Either<&ArrayRef, &Option<String>>>>>()?;
 
-    let first_arg = &data.first().unwrap().left().unwrap();
+    let first = data.first().unwrap();
+    let first_array = first.left().unwrap();
+    let string_array = StringArrays::try_from(first_array)?;
 
-    first_arg
+    string_array
         .iter()
         .enumerate()
         .map(|(pos, x)| {
@@ -328,13 +335,13 @@ where
                 for param_arg in param_args {
                     // param_arg is an array, use the corresponding index into the array as the arg
                     // we're currently parsing
-                    let p = *param_arg;
+                    let p = param_arg;
                     let r = if p.is_left() {
-                        let p = p.left().unwrap();
+                        let p = StringArrays::try_from(p.left().unwrap())?;
                         op(x, p.value(pos))
                     }
                     // args is a scalar, use it directly
-                    else if let Some(p) = p.right().unwrap() {
+                    else if let Some(p) = p.as_ref().right().unwrap() {
                         op(x, p.as_str())
                     } else {
                         continue;
@@ -360,27 +367,17 @@ where
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not 1 or
-/// * the first argument is not castable to a `GenericStringArray` or
+/// * the first argument is not castable to a `GenericStringArray` or StringViewArray
 /// * the function `op` errors
-fn unary_string_to_primitive_function<'a, T, O, F>(
-    args: &[&'a dyn Array],
+fn unary_string_to_primitive_function<'a, O, F>(
+    array: &'a ArrayRef,
     op: F,
-    name: &str,
 ) -> Result<PrimitiveArray<O>>
 where
     O: ArrowPrimitiveType,
-    T: OffsetSizeTrait,
     F: Fn(&'a str) -> Result<O::Native>,
 {
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            name
-        );
-    }
-
-    let array = as_generic_string_array::<T>(args[0])?;
+    let array = StringArrays::try_from(array)?;
 
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()

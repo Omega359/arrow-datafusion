@@ -15,12 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{
+    Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, AsArray, GenericStringArray,
+    OffsetSizeTrait, StringViewArray,
+};
 use arrow::datatypes::DataType;
-
-use datafusion_common::{Result, ScalarValue};
+use arrow_buffer::NullBuffer;
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
@@ -120,6 +125,313 @@ where
             result.map(ColumnarValue::Array)
         }
     })
+}
+
+/// An enum that holds string arrays that helps with writing generic code
+/// that can work with different types of string arrays.
+///
+/// Currently three types of arrays are supported:
+/// - `GenericStringArray<i32>`
+/// - `GenericStringArray<i64>`
+/// - `StringViewArray`
+///
+/// The use of this enum is useful since Rust currently disallows `StringArrayType` to be used
+/// as an object (since it's Sized and uses self).
+///
+/// # Examples
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::array::{StringArray, LargeStringArray, StringViewArray, ArrayAccessor, ArrayRef, ArrayIter};
+/// # use datafusion_functions::utils::{StringArrayType, StringArrays};
+///
+/// /// Combines string values for any ArrayAccessor type. It can be invoked on
+/// /// and combination of `StringArray`, `LargeStringArray` or `StringViewArray`
+/// fn combine_values<'a>(array1: &StringArrays, array2: &StringArrays) -> Vec<String> {
+///   // iterate over the elements of the 2 arrays in parallel
+///   array1
+///   .iter()
+///   .zip(array2.iter())
+///   .map(|(s1, s2)| {
+///      // if both values are non null, combine them
+///      if let (Some(s1), Some(s2)) = (s1, s2) {
+///        format!("{s1}{s2}")
+///      } else {
+///        "None".to_string()
+///     }
+///    })
+///   .collect()
+/// }
+///
+/// // build a few arrays for this example
+/// let string_array = StringArray::from(vec!["foo", "bar"]);
+/// let large_string_array = LargeStringArray::from(vec!["foo2", "bar2"]);
+/// let string_view_array = StringViewArray::from(vec!["foo3", "bar3"]);
+///
+/// // these arrayRef's are what a Udf is likely to receive
+/// let array_ref_1 = Arc::new(string_array.clone()) as ArrayRef;
+/// let array_ref_2 = Arc::new(large_string_array.clone()) as ArrayRef;
+/// let array_ref_3 = Arc::new(string_view_array.clone()) as ArrayRef;
+///
+/// // Easily convert the different type of arrays using a single api.
+/// let array_1 = StringArrays::try_from(&array_ref_1).unwrap();
+/// let array_2 = StringArrays::try_from(&array_ref_2).unwrap();
+/// let array_3 = StringArrays::try_from(&array_ref_3).unwrap();
+///
+/// // can invoke this function a any of the array types
+/// assert_eq!(
+///   combine_values(&array_1, &array_2),
+///   vec![String::from("foofoo2"), String::from("barbar2")]
+/// );
+///
+/// // Can call the same function with string array and string view array
+/// assert_eq!(
+///   combine_values(&array_1, &array_3),
+///   vec![String::from("foofoo3"), String::from("barbar3")]
+/// );
+/// ```
+///
+/// This enum also implements ArrayIter` allowing for calls such as
+/// ArrayIter::new(string_arrays)
+///
+/// or pass it into a method that expects an `ArrayAccessor`
+/// do_something(&string_arrays)
+///
+/// To obtain a `StringArrays` object from a typical `&ArrayRef` use
+/// let string_array = StringArrays::try_from(array)?;
+pub enum StringArrays<'a> {
+    StringView(&'a StringViewArray),
+    String(&'a GenericStringArray<i32>),
+    LargeString(&'a GenericStringArray<i64>),
+}
+
+pub trait Iter {
+    fn iter(self) -> ArrayIter<Self>
+    where
+        Self: ArrayAccessor,
+        Self: Sized;
+}
+
+impl<'a> Iter for StringArrays<'a> {
+    fn iter(self) -> ArrayIter<Self> {
+        ArrayIter::new(self)
+    }
+}
+
+impl<'a> TryFrom<&'a ArrayRef> for StringArrays<'a> {
+    type Error = DataFusionError;
+
+    fn try_from(array: &'a ArrayRef) -> Result<Self, Self::Error> {
+        match array.data_type() {
+            DataType::Utf8 => Ok(StringArrays::from(array.as_string::<i32>())),
+            DataType::LargeUtf8 => Ok(StringArrays::from(array.as_string::<i64>())),
+            DataType::Utf8View => Ok(StringArrays::from(array.as_string_view())),
+            other => {
+                exec_err!("Unsupported data type {other:?} for function substr_index")
+            }
+        }
+    }
+}
+
+impl<'a> From<&'a StringViewArray> for StringArrays<'a> {
+    fn from(value: &'a StringViewArray) -> Self {
+        StringArrays::StringView(value)
+    }
+}
+impl<'a> From<&'a GenericStringArray<i32>> for StringArrays<'a> {
+    fn from(value: &'a GenericStringArray<i32>) -> Self {
+        StringArrays::String(value)
+    }
+}
+impl<'a> From<&'a GenericStringArray<i64>> for StringArrays<'a> {
+    fn from(value: &'a GenericStringArray<i64>) -> Self {
+        StringArrays::LargeString(value)
+    }
+}
+
+impl<'a> Array for StringArrays<'a> {
+    fn as_any(&self) -> &dyn Any {
+        match self {
+            StringArrays::StringView(sv) => sv.as_any(),
+            StringArrays::String(s) => s.as_any(),
+            StringArrays::LargeString(s) => s.as_any(),
+        }
+    }
+
+    fn to_data(&self) -> ArrayData {
+        match self {
+            StringArrays::StringView(sv) => sv.to_data(),
+            StringArrays::String(s) => s.to_data(),
+            StringArrays::LargeString(s) => s.to_data(),
+        }
+    }
+
+    fn into_data(self) -> ArrayData {
+        match self {
+            StringArrays::StringView(sv) => sv.into_data(),
+            StringArrays::String(s) => s.into_data(),
+            StringArrays::LargeString(s) => s.into_data(),
+        }
+    }
+
+    fn data_type(&self) -> &DataType {
+        match self {
+            StringArrays::StringView(sv) => sv.data_type(),
+            StringArrays::String(s) => s.data_type(),
+            StringArrays::LargeString(s) => s.data_type(),
+        }
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        match self {
+            StringArrays::StringView(sv) => sv.slice(offset, length),
+            StringArrays::String(s) => s.slice(offset, length),
+            StringArrays::LargeString(s) => s.slice(offset, length),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            StringArrays::StringView(sv) => sv.len(),
+            StringArrays::String(s) => s.len(),
+            StringArrays::LargeString(s) => s.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            StringArrays::StringView(sv) => sv.is_empty(),
+            StringArrays::String(s) => s.is_empty(),
+            StringArrays::LargeString(s) => s.is_empty(),
+        }
+    }
+
+    fn offset(&self) -> usize {
+        match self {
+            StringArrays::StringView(sv) => sv.offset(),
+            StringArrays::String(s) => s.offset(),
+            StringArrays::LargeString(s) => s.offset(),
+        }
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        match self {
+            StringArrays::StringView(sv) => sv.nulls(),
+            StringArrays::String(s) => s.nulls(),
+            StringArrays::LargeString(s) => s.nulls(),
+        }
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        match self {
+            StringArrays::StringView(sv) => sv.get_buffer_memory_size(),
+            StringArrays::String(s) => s.get_buffer_memory_size(),
+            StringArrays::LargeString(s) => s.get_buffer_memory_size(),
+        }
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        match self {
+            StringArrays::StringView(sv) => sv.get_array_memory_size(),
+            StringArrays::String(s) => s.get_array_memory_size(),
+            StringArrays::LargeString(s) => s.get_array_memory_size(),
+        }
+    }
+}
+
+impl<'a> Debug for StringArrays<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StringArrays::StringView(sv) => sv.fmt(f),
+            StringArrays::String(s) => s.fmt(f),
+            StringArrays::LargeString(s) => s.fmt(f),
+        }
+    }
+}
+
+impl<'a> Display for StringArrays<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StringArrays::StringView(sv) => sv.fmt(f),
+            StringArrays::String(s) => s.fmt(f),
+            StringArrays::LargeString(s) => s.fmt(f),
+        }
+    }
+}
+
+impl<'a> ArrayAccessor for &'a StringArrays<'a> {
+    type Item = &'a str;
+
+    fn value(&self, index: usize) -> Self::Item {
+        match self {
+            StringArrays::StringView(sv) => StringArrayType::value(sv, index),
+            StringArrays::String(s) => GenericStringArray::<i32>::value(s, index),
+            StringArrays::LargeString(s) => GenericStringArray::<i64>::value(s, index),
+        }
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        match self {
+            StringArrays::StringView(sv) => sv.value_unchecked(index),
+            StringArrays::String(s) => s.value_unchecked(index),
+            StringArrays::LargeString(s) => s.value_unchecked(index),
+        }
+    }
+}
+
+impl<'a> ArrayAccessor for StringArrays<'a> {
+    type Item = &'a str;
+
+    fn value(&self, index: usize) -> Self::Item {
+        match self {
+            StringArrays::StringView(sv) => StringArrayType::value(sv, index),
+            StringArrays::String(s) => GenericStringArray::<i32>::value(s, index),
+            StringArrays::LargeString(s) => GenericStringArray::<i64>::value(s, index),
+        }
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        match self {
+            StringArrays::StringView(sv) => sv.value_unchecked(index),
+            StringArrays::String(s) => s.value_unchecked(index),
+            StringArrays::LargeString(s) => s.value_unchecked(index),
+        }
+    }
+}
+
+impl<'a> StringArrayType<'a> for &'a StringArrays<'a> {
+    fn iter(&self) -> ArrayIter<Self> {
+        ArrayIter::new(self)
+    }
+
+    fn value(&self, index: usize) -> Self::Item {
+        ArrayAccessor::value(self, index)
+    }
+}
+
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    fn iter(&self) -> ArrayIter<Self>;
+
+    fn value(&self, index: usize) -> Self::Item;
+}
+
+impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<T>::iter(self)
+    }
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericStringArray::<T>::value(self, index)
+    }
+}
+
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
+
+    fn value(&self, index: usize) -> Self::Item {
+        StringViewArray::value(self, index)
+    }
 }
 
 #[cfg(test)]

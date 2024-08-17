@@ -31,8 +31,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::string::common::StringArrayType;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::{make_scalar_function, utf8_to_str_type, StringArrayType};
 
 #[derive(Debug)]
 pub struct RepeatFunc {
