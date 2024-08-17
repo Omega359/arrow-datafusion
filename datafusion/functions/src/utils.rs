@@ -213,11 +213,11 @@ impl<'a> TryFrom<&'a ArrayRef> for StringArrays<'a> {
 
     fn try_from(array: &'a ArrayRef) -> Result<Self, Self::Error> {
         match array.data_type() {
+            DataType::Utf8View => Ok(StringArrays::from(array.as_string_view())),
             DataType::Utf8 => Ok(StringArrays::from(array.as_string::<i32>())),
             DataType::LargeUtf8 => Ok(StringArrays::from(array.as_string::<i64>())),
-            DataType::Utf8View => Ok(StringArrays::from(array.as_string_view())),
             other => {
-                exec_err!("Unsupported data type {other:?} for function substr_index")
+                exec_err!("Unsupported data type {other:?} for StringArrays. Supported types include Utf8View, Utf8 and LargeUtf8")
             }
         }
     }
