@@ -189,15 +189,6 @@ where
 ///   vec![String::from("foofoo3"), String::from("barbar3")]
 /// );
 /// ```
-///
-/// This enum also implements ArrayIter` allowing for calls such as
-/// ArrayIter::new(string_arrays)
-///
-/// or pass it into a method that expects an `ArrayAccessor`
-/// do_something(&string_arrays)
-///
-/// To obtain a `StringArrays` object from a typical `&ArrayRef` use
-/// let string_array = StringArrays::try_from(array)?;
 pub enum StringArrays<'a> {
     StringView(&'a StringViewArray),
     String(&'a GenericStringArray<i32>),
