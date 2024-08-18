@@ -352,6 +352,7 @@ impl<'a> Display for StringArrays<'a> {
 impl<'a> ArrayAccessor for &'a StringArrays<'a> {
     type Item = &'a str;
 
+    #[inline]
     fn value(&self, index: usize) -> Self::Item {
         match self {
             StringArrays::StringView(sv) => StringArrayType::value(sv, index),
@@ -372,6 +373,7 @@ impl<'a> ArrayAccessor for &'a StringArrays<'a> {
 impl<'a> ArrayAccessor for StringArrays<'a> {
     type Item = &'a str;
 
+    #[inline]
     fn value(&self, index: usize) -> Self::Item {
         match self {
             StringArrays::StringView(sv) => StringArrayType::value(sv, index),
