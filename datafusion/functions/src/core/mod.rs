@@ -31,6 +31,7 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
+pub mod version;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
@@ -42,6 +43,7 @@ make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
+make_udf_function!(version::VersionFunc, VERSION, version);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -86,6 +88,7 @@ pub mod expr_fn {
     }
 }
 
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         nullif(),
@@ -94,6 +97,15 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nvl2(),
         arrow_typeof(),
         named_struct(),
+        // Note: most users invoke `get_field` indirectly via field access
+        // syntax like `my_struct_col['field_name']`, which results in a call to
+        // `get_field(my_struct_col, "field_name")`.
+        //
+        // However, it is also exposed directly for use cases such as
+        // serializing / deserializing plans with the field access  desugared to
+        // calls to `get_field`
+        get_field(),
         coalesce(),
+        version(),
     ]
 }

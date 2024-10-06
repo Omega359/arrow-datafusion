@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use chrono::{TimeZone, Utc};
+use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -169,13 +170,10 @@ pub fn parse_physical_window_expr(
     // TODO: Remove extended_schema if functions are all UDAF
     let extended_schema =
         schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
-    // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
-    let logical_exprs = &[];
     create_window_expr(
         &fun,
         name,
         &window_node_expr,
-        logical_exprs,
         &partition_by,
         &order_by,
         Arc::new(window_frame),
@@ -643,13 +641,18 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
                 Ok((name.clone(), data_type))
             })
             .collect::<Result<Vec<_>>>()?;
+        let insert_op = match conf.insert_op() {
+            protobuf::InsertOp::Append => InsertOp::Append,
+            protobuf::InsertOp::Overwrite => InsertOp::Overwrite,
+            protobuf::InsertOp::Replace => InsertOp::Replace,
+        };
         Ok(Self {
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
             file_groups,
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            overwrite: conf.overwrite,
+            insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
         })
     }

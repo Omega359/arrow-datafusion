@@ -49,6 +49,51 @@ true
 true
 
 query B
+SELECT str ~ NULL FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
+select str ~ right('foo', NULL) FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
+select right('foo', NULL) !~ str FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
 SELECT regexp_like('foobarbequebaz', '');
 ----
 true
@@ -94,7 +139,7 @@ SELECT regexp_like('aa', '.*-(\d)');
 ----
 false
 
-query ?
+query B
 SELECT regexp_like(NULL, '.*-(\d)');
 ----
 NULL
@@ -104,7 +149,7 @@ SELECT regexp_like('aaa-0', NULL);
 ----
 NULL
 
-query ?
+query B
 SELECT regexp_like(null, '.*-(\d)');
 ----
 NULL
@@ -230,6 +275,66 @@ SELECT regexp_match('aaa-555', '.*-(\d*)');
 ----
 [555]
 
+query B
+select 'abc' ~ null;
+----
+NULL
+
+query B
+select null ~ null;
+----
+NULL
+
+query B
+select null ~ 'abc';
+----
+NULL
+
+query B
+select 'abc' ~* null;
+----
+NULL
+
+query B
+select null ~* null;
+----
+NULL
+
+query B
+select null ~* 'abc';
+----
+NULL
+
+query B
+select 'abc' !~ null;
+----
+NULL
+
+query B
+select null !~ null;
+----
+NULL
+
+query B
+select null !~ 'abc';
+----
+NULL
+
+query B
+select 'abc' !~* null;
+----
+NULL
+
+query B
+select null !~* null;
+----
+NULL
+
+query B
+select null !~* 'abc';
+----
+NULL
+
 #
 # regexp_replace tests
 #
@@ -294,7 +399,7 @@ SELECT regexp_replace('Thomas', '.[mN]a.', 'M');
 ----
 ThM
 
-query ?
+query T
 SELECT regexp_replace(NULL, 'b(..)', 'X\\1Y', 'g');
 ----
 NULL
@@ -335,6 +440,26 @@ SELECT 'foo\nbar\nbaz' LIKE '%bar%';
 ----
 true
 
+query B
+SELECT NULL LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL iLIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not iLIKE NULL;
+----
+NULL
+
 statement ok
 drop table t;
 
@@ -353,7 +478,7 @@ create or replace table dict_table as
 select arrow_cast(column1, 'Dictionary(Int32, Utf8)') as column1
 from strings;
 
-query ?
+query T
 select column1 from dict_table where column1 LIKE '%oo%';
 ----
 FooBar
@@ -361,14 +486,14 @@ Foo
 Foo
 FooBar
 
-query ?
+query T
 select column1 from dict_table where column1 NOT LIKE '%oo%';
 ----
 Bar
 Bar
 Baz
 
-query ?
+query T
 select column1 from dict_table where column1 ILIKE '%oO%';
 ----
 FooBar
@@ -376,7 +501,7 @@ Foo
 Foo
 FooBar
 
-query ?
+query T
 select column1 from dict_table where column1 NOT ILIKE '%oO%';
 ----
 Bar

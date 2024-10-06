@@ -19,8 +19,8 @@ use arrow_schema::Field;
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    Result, TableReference,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
+    DataFusionError, Result, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -113,13 +113,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
-            // Currently not supporting more than one nested level
-            // Though ideally once that support is in place, this code should work with it
-            // TODO: remove when can support multiple nested identifiers
-            if ids.len() > 5 {
-                return not_impl_err!("Compound identifier: {ids:?}");
-            }
-
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
@@ -132,17 +125,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             nested_names,
                         ) {
                             match planner_result {
-                                PlannerResult::Planned(expr) => return Ok(expr),
+                                PlannerResult::Planned(expr) => {
+                                    // sanity check on column
+                                    schema
+                                        .check_ambiguous_name(qualifier, field.name())?;
+                                    return Ok(expr);
+                                }
                                 PlannerResult::Original(_args) => {}
                             }
                         }
                     }
-                    not_impl_err!(
-                        "Compound identifiers not supported by ExprPlanner: {ids:?}"
-                    )
+                    plan_err!("could not parse compound identifier from {ids:?}")
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
+                    // sanity check on column
+                    schema.check_ambiguous_name(qualifier, field.name())?;
                     Ok(Expr::Column(Column::from((qualifier, field))))
                 }
                 None => {
@@ -186,6 +184,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let s = &ids[0..ids.len()];
                             // safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
+                            // sanity check on column
+                            schema
+                                .check_ambiguous_name(relation.as_ref(), column_name)?;
                             Ok(Expr::Column(Column::new(relation, column_name)))
                         }
                     }

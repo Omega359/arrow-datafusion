@@ -40,10 +40,9 @@ pub use crate::window::lead_lag::{lag, lead, WindowShift};
 pub use crate::window::nth_value::NthValue;
 pub use crate::window::ntile::Ntile;
 pub use crate::window::rank::{dense_rank, percent_rank, rank, Rank, RankType};
-pub use crate::window::row_number::RowNumber;
 pub use crate::PhysicalSortExpr;
 
-pub use binary::{binary, BinaryExpr};
+pub use binary::{binary, similar_to, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, CastExpr};
 pub use column::{col, with_new_schema, Column};

@@ -24,14 +24,14 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 
 /// Optimization rule that tries to push down `LIMIT`.
 ///
 //. It will push down through projection, limits (taking the smaller limit)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownLimit {}
 
 impl PushDownLimit {
@@ -82,7 +82,7 @@ impl OptimizerRule for PushDownLimit {
             })));
         };
 
-        match unwrap_arc(input) {
+        match Arc::unwrap_or_clone(input) {
             LogicalPlan::TableScan(mut scan) => {
                 let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan
@@ -128,7 +128,11 @@ impl OptimizerRule for PushDownLimit {
                     Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
                 };
                 if new_fetch == sort.fetch {
-                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                    if skip > 0 {
+                        original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                    } else {
+                        Ok(Transformed::yes(LogicalPlan::Sort(sort)))
+                    }
                 } else {
                     sort.fetch = new_fetch;
                     limit.input = Arc::new(LogicalPlan::Sort(sort));
@@ -148,6 +152,29 @@ impl OptimizerRule for PushDownLimit {
                 let new_limit = LogicalPlan::Limit(limit);
                 subquery_alias.input = Arc::new(new_limit);
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
+            }
+            LogicalPlan::Extension(extension_plan)
+                if extension_plan.node.supports_limit_pushdown() =>
+            {
+                let new_children = extension_plan
+                    .node
+                    .inputs()
+                    .into_iter()
+                    .map(|child| {
+                        LogicalPlan::Limit(Limit {
+                            skip: 0,
+                            fetch: Some(fetch + skip),
+                            input: Arc::new(child.clone()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                // Create a new extension node with updated inputs
+                let child_plan = LogicalPlan::Extension(extension_plan);
+                let new_extension =
+                    child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
+
+                transformed_limit(skip, fetch, new_extension)
             }
             input => original_limit(skip, fetch, input),
         }
@@ -217,69 +244,6 @@ fn transformed_limit(
     })))
 }
 
-/// Computes the `skip` and `fetch` parameters of a single limit that would be
-/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
-///
-/// There are multiple cases to consider:
-///
-/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
-///
-/// ```text
-///   Before merging:
-///                     |........skip........|---fetch-->|     Parent limit
-///    |...child_skip...|---child_fetch-->|                    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |.........(child_skip + skip).........|
-/// ```
-///
-/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|------------fetch------------>|   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|       Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|---fetch-->|                   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---fetch-->|
-/// ```
-pub fn combine_limit(
-    parent_skip: usize,
-    parent_fetch: Option<usize>,
-    child_skip: usize,
-    child_fetch: Option<usize>,
-) -> (usize, Option<usize>) {
-    let combined_skip = child_skip.saturating_add(parent_skip);
-
-    let combined_fetch = match (parent_fetch, child_fetch) {
-        (Some(parent_fetch), Some(child_fetch)) => {
-            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
-        }
-        (Some(parent_fetch), None) => Some(parent_fetch),
-        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
-        (None, None) => None,
-    };
-
-    (combined_skip, combined_fetch)
-}
-
 /// Adds a limit to the inputs of a join, if possible
 fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     use JoinType::*;
@@ -317,15 +281,239 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
 
 #[cfg(test)]
 mod test {
+    use std::cmp::Ordering;
+    use std::fmt::{Debug, Formatter};
     use std::vec;
 
     use super::*;
     use crate::test::*;
-    use datafusion_expr::{col, exists, logical_plan::builder::LogicalPlanBuilder};
+
+    use datafusion_common::DFSchemaRef;
+    use datafusion_expr::{
+        col, exists, logical_plan::builder::LogicalPlanBuilder, Expr, Extension,
+        UserDefinedLogicalNodeCore,
+    };
     use datafusion_functions_aggregate::expr_fn::max;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    pub struct NoopPlan {
+        input: Vec<LogicalPlan>,
+        schema: DFSchemaRef,
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for NoopPlan {
+        fn name(&self) -> &str {
+            "NoopPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            self.input.iter().collect()
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.input
+                .iter()
+                .flat_map(|child| child.expressions())
+                .collect()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "NoopPlan")
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: inputs,
+                schema: Arc::clone(&self.schema),
+            })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            true // Allow limit push-down
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoLimitNoopPlan {
+        input: Vec<LogicalPlan>,
+        schema: DFSchemaRef,
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoLimitNoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for NoLimitNoopPlan {
+        fn name(&self) -> &str {
+            "NoLimitNoopPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            self.input.iter().collect()
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.input
+                .iter()
+                .flat_map(|child| child.expressions())
+                .collect()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "NoLimitNoopPlan")
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: inputs,
+                schema: Arc::clone(&self.schema),
+            })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
+        }
+    }
+    #[test]
+    fn limit_pushdown_basic() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let noop_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+
+        let plan = LogicalPlanBuilder::from(noop_plan)
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  NoopPlan\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000";
+
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn limit_pushdown_with_skip() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let noop_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+
+        let plan = LogicalPlanBuilder::from(noop_plan)
+            .limit(10, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=10, fetch=1000\
+        \n  NoopPlan\
+        \n    Limit: skip=0, fetch=1010\
+        \n      TableScan: test, fetch=1010";
+
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn limit_pushdown_multiple_limits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let noop_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+
+        let plan = LogicalPlanBuilder::from(noop_plan)
+            .limit(10, Some(1000))?
+            .limit(20, Some(500))?
+            .build()?;
+
+        let expected = "Limit: skip=30, fetch=500\
+        \n  NoopPlan\
+        \n    Limit: skip=0, fetch=530\
+        \n      TableScan: test, fetch=530";
+
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn limit_pushdown_multiple_inputs() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let noop_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone(), table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+
+        let plan = LogicalPlanBuilder::from(noop_plan)
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  NoopPlan\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000";
+
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn limit_pushdown_disallowed_noop_plan() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let no_limit_noop_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoLimitNoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+
+        let plan = LogicalPlanBuilder::from(no_limit_noop_plan)
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  NoLimitNoopPlan\
+        \n    TableScan: test";
+
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -406,13 +594,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(0, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=0, fetch=10\
-        \n  Sort: test.a, fetch=10\
+        \n  Sort: test.a ASC NULLS LAST, fetch=10\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
@@ -423,13 +611,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(5, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a, fetch=15\
+        \n  Sort: test.a ASC NULLS LAST, fetch=15\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)

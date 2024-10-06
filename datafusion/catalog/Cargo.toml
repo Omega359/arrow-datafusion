@@ -17,6 +17,7 @@
 
 [package]
 name = "datafusion-catalog"
+description = "datafusion-catalog"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -28,11 +29,12 @@ version.workspace = true
 
 [dependencies]
 arrow-schema = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+parking_lot = { workspace = true }
 
 [lints]
 workspace = true

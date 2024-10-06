@@ -34,15 +34,15 @@ use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::transpose;
-use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
+use arrow_array::{PrimitiveArray, RecordBatchOptions};
+use datafusion_common::utils::{take_arrays, transpose};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -275,12 +275,11 @@ impl BatchPartitioner {
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                        .map(|_| Vec::with_capacity(batch.num_rows()))
                         .collect();
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize]
-                            .append_value(index as u64);
+                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
                     }
 
                     // Finished building index-arrays for output partitions
@@ -291,8 +290,8 @@ impl BatchPartitioner {
                     let it = indices
                         .into_iter()
                         .enumerate()
-                        .filter_map(|(partition, mut indices)| {
-                            let indices = indices.finish();
+                        .filter_map(|(partition, indices)| {
+                            let indices: PrimitiveArray<UInt32Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
@@ -300,17 +299,16 @@ impl BatchPartitioner {
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns = batch
-                                .columns()
-                                .iter()
-                                .map(|c| {
-                                    arrow::compute::take(c.as_ref(), &indices, None)
-                                        .map_err(|e| arrow_datafusion_err!(e))
-                                })
-                                .collect::<Result<Vec<ArrayRef>>>()?;
+                            let columns = take_arrays(batch.columns(), &indices)?;
 
-                            let batch =
-                                RecordBatch::try_new(batch.schema(), columns).unwrap();
+                            let mut options = RecordBatchOptions::new();
+                            options = options.with_row_count(Some(indices.len()));
+                            let batch = RecordBatch::try_new_with_options(
+                                batch.schema(),
+                                columns,
+                                &options,
+                            )
+                            .unwrap();
 
                             Ok((partition, batch))
                         });
@@ -379,6 +377,11 @@ impl BatchPartitioner {
 ///         `───────'                   `───────'
 ///```
 ///
+/// # Error Handling
+///
+/// If any of the input partitions return an error, the error is propagated to
+/// all output partitions and inputs are not polled again.
+///
 /// # Output Ordering
 ///
 /// If more than one stream is being repartitioned, the output will be some
@@ -397,8 +400,6 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-    /// Partitioning scheme to use
-    partitioning: Partitioning,
     /// Inner state that is initialized when the first output stream is created.
     state: LazyState,
     /// Execution metrics
@@ -463,7 +464,7 @@ impl RepartitionExec {
 
     /// Partitioning scheme to use
     pub fn partitioning(&self) -> &Partitioning {
-        &self.partitioning
+        &self.cache.partitioning
     }
 
     /// Get preserve_order flag of the RepartitionExecutor
@@ -490,7 +491,7 @@ impl DisplayAs for RepartitionExec {
                     f,
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
-                    self.partitioning,
+                    self.partitioning(),
                     self.input.output_partitioning().partition_count()
                 )?;
 
@@ -533,8 +534,10 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut repartition =
-            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone())?;
+        let mut repartition = RepartitionExec::try_new(
+            children.swap_remove(0),
+            self.partitioning().clone(),
+        )?;
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
@@ -542,7 +545,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
+        vec![matches!(self.partitioning(), Partitioning::Hash(_, _))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -562,7 +565,7 @@ impl ExecutionPlan for RepartitionExec {
 
         let lazy_state = Arc::clone(&self.state);
         let input = Arc::clone(&self.input);
-        let partitioning = self.partitioning.clone();
+        let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.preserve_order;
         let name = self.name().to_owned();
@@ -634,15 +637,15 @@ impl ExecutionPlan for RepartitionExec {
                 let merge_reservation =
                     MemoryConsumer::new(format!("{}[Merge {partition}]", name))
                         .register(context.memory_pool());
-                streaming_merge(
-                    input_streams,
-                    schema_captured,
-                    &sort_exprs,
-                    BaselineMetrics::new(&metrics, partition),
-                    context.session_config().batch_size(),
-                    fetch,
-                    merge_reservation,
-                )
+                StreamingMergeBuilder::new()
+                    .with_streams(input_streams)
+                    .with_schema(schema_captured)
+                    .with_expressions(&sort_exprs)
+                    .with_metrics(BaselineMetrics::new(&metrics, partition))
+                    .with_batch_size(context.session_config().batch_size())
+                    .with_fetch(fetch)
+                    .with_reservation(merge_reservation)
+                    .build()
             } else {
                 Ok(Box::pin(RepartitionStream {
                     num_input_partitions,
@@ -681,7 +684,6 @@ impl RepartitionExec {
             Self::compute_properties(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
-            partitioning,
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
@@ -1021,11 +1023,11 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use arrow::array::{StringArray, UInt32Array};
+    use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use tokio::task::JoinSet;
 
@@ -1128,7 +1130,7 @@ mod tests {
 
         // execute and collect results
         let mut output_partitions = vec![];
-        for i in 0..exec.partitioning.partition_count() {
+        for i in 0..exec.partitioning().partition_count() {
             // execute this *output* partition and collect all batches
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let mut batches = vec![];
@@ -1506,9 +1508,9 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(4);
 
         // setup up context
-        let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);
@@ -1518,7 +1520,7 @@ mod tests {
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // pull partitions
-        for i in 0..exec.partitioning.partition_count() {
+        for i in 0..exec.partitioning().partition_count() {
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let err =
                 arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());

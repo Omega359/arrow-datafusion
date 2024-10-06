@@ -28,7 +28,6 @@ use datafusion_common::{
     JoinConstraint, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
@@ -131,7 +130,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// reaches a plan node that does not commute with that filter, it adds the
 /// filter to that place. When it passes through a projection, it re-writes the
 /// filter's expression taking into account that projection.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownFilter {}
 
 /// For a given JOIN type, determine whether each input of the join is preserved
@@ -158,18 +157,18 @@ pub struct PushDownFilter {}
 ///     the right is not, because there may be rows in the output that don't
 ///     directly map to a row in the right input (due to nulls filling where there
 ///     is no match on the right).
-fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
+pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
-        JoinType::Inner => Ok((true, true)),
-        JoinType::Left => Ok((true, false)),
-        JoinType::Right => Ok((false, true)),
-        JoinType::Full => Ok((false, false)),
+        JoinType::Inner => (true, true),
+        JoinType::Left => (true, false),
+        JoinType::Right => (false, true),
+        JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::LeftSemi | JoinType::LeftAnti => Ok((true, false)),
+        JoinType::LeftSemi | JoinType::LeftAnti => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => Ok((false, true)),
+        JoinType::RightSemi | JoinType::RightAnti => (false, true),
     }
 }
 
@@ -182,15 +181,15 @@ fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
 /// A tuple of booleans - (left_preserved, right_preserved).
 ///
 /// See [`lr_is_preserved`] for a definition of "preserved".
-fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
+pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
-        JoinType::Inner => Ok((true, true)),
-        JoinType::Left => Ok((false, true)),
-        JoinType::Right => Ok((true, false)),
-        JoinType::Full => Ok((false, false)),
-        JoinType::LeftSemi | JoinType::RightSemi => Ok((true, true)),
-        JoinType::LeftAnti => Ok((false, true)),
-        JoinType::RightAnti => Ok((true, false)),
+        JoinType::Inner => (true, true),
+        JoinType::Left => (false, true),
+        JoinType::Right => (true, false),
+        JoinType::Full => (false, false),
+        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+        JoinType::LeftAnti => (false, true),
+        JoinType::RightAnti => (true, false),
     }
 }
 
@@ -285,8 +284,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::TryCast(_)
         | Expr::InList { .. }
         | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
-        Expr::Sort(_)
-        | Expr::AggregateFunction(_)
+        Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
@@ -422,7 +420,7 @@ fn push_down_all_join(
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type)?;
+    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
@@ -459,7 +457,7 @@ fn push_down_all_join(
     }
 
     let mut on_filter_join_conditions = vec![];
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
+    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
 
     if !on_filter.is_empty() {
         for on in on_filter {
@@ -658,7 +656,7 @@ impl OptimizerRule for PushDownFilter {
             return Ok(Transformed::no(plan));
         };
 
-        match unwrap_arc(filter.input) {
+        match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
 
@@ -745,7 +743,9 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                        accum.contains(&unnest_list.output_column)
+                    }) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -820,7 +820,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
                     .collect::<Result<HashSet<_>>>()?;
 
-                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let predicates = split_conjunction_owned(filter.predicate);
 
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
@@ -1139,19 +1139,19 @@ fn convert_to_cross_join_if_beneficial(
     match plan {
         // Can be converted back to cross join
         LogicalPlan::Join(join) if join.on.is_empty() && join.filter.is_none() => {
-            LogicalPlanBuilder::from(unwrap_arc(join.left))
-                .cross_join(unwrap_arc(join.right))?
+            LogicalPlanBuilder::from(Arc::unwrap_or_clone(join.left))
+                .cross_join(Arc::unwrap_or_clone(join.right))?
                 .build()
                 .map(Transformed::yes)
         }
-        LogicalPlan::Filter(filter) => convert_to_cross_join_if_beneficial(unwrap_arc(
-            filter.input,
-        ))?
-        .transform_data(|child_plan| {
-            Filter::try_new(filter.predicate, Arc::new(child_plan))
-                .map(LogicalPlan::Filter)
-                .map(Transformed::yes)
-        }),
+        LogicalPlan::Filter(filter) => {
+            convert_to_cross_join_if_beneficial(Arc::unwrap_or_clone(filter.input))?
+                .transform_data(|child_plan| {
+                    Filter::try_new(filter.predicate, Arc::new(child_plan))
+                        .map(LogicalPlan::Filter)
+                        .map(Transformed::yes)
+                })
+        }
         plan => Ok(Transformed::no(plan)),
     }
 }
@@ -1197,6 +1197,7 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1453,6 +1454,13 @@ mod tests {
         schema: DFSchemaRef,
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
+    }
+
     impl UserDefinedLogicalNodeCore for NoopPlan {
         fn name(&self) -> &str {
             "NoopPlan"
@@ -1490,6 +1498,10 @@ mod tests {
                 input: inputs,
                 schema: Arc::clone(&self.schema),
             })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 
@@ -2418,11 +2430,13 @@ mod tests {
             TableType::Base
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _e: &Expr,
-        ) -> Result<TableProviderFilterPushDown> {
-            Ok(self.filter_support.clone())
+            filters: &[&Expr],
+        ) -> Result<Vec<TableProviderFilterPushDown>> {
+            Ok((0..filters.len())
+                .map(|_| self.filter_support.clone())
+                .collect())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {

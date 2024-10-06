@@ -15,22 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
+use super::binary::{binary_numeric_coercion, comparison_coercion};
+use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err, Result,
+    exec_err, internal_datafusion_err, internal_err, plan_err,
+    utils::{coerced_fixed_size_list_to_list, list_ndims},
+    Result,
 };
 use datafusion_expr_common::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
-
-use super::binary::{binary_numeric_coercion, comparison_coercion};
+use std::sync::Arc;
 
 /// Performs type coercion for scalar function arguments.
 ///
@@ -66,6 +65,13 @@ pub fn data_types_with_scalar_udf(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+/// Performs type coercion for aggregate function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types_with_aggregate_udf(
     current_types: &[DataType],
     func: &AggregateUDF,
@@ -85,6 +91,39 @@ pub fn data_types_with_aggregate_udf(
         current_types,
         func,
     )?;
+    if valid_types
+        .iter()
+        .any(|data_type| data_type == current_types)
+    {
+        return Ok(current_types.to_vec());
+    }
+
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
+}
+
+/// Performs type coercion for window function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+pub fn data_types_with_window_udf(
+    current_types: &[DataType],
+    func: &WindowUDF,
+) -> Result<Vec<DataType>> {
+    let signature = func.signature();
+
+    if current_types.is_empty() {
+        if signature.type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else {
+            return plan_err!("{} does not support zero arguments.", func.name());
+        }
+    }
+
+    let valid_types =
+        get_valid_types_with_window_udf(&signature.type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -128,6 +167,20 @@ pub fn data_types(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
+    if let TypeSignature::OneOf(signatures) = type_signature {
+        return signatures.iter().all(is_well_supported_signature);
+    }
+
+    matches!(
+        type_signature,
+        TypeSignature::UserDefined
+            | TypeSignature::Numeric(_)
+            | TypeSignature::Coercible(_)
+            | TypeSignature::Any(_)
+    )
+}
+
 fn try_coerce_types(
     valid_types: Vec<Vec<DataType>>,
     current_types: &[DataType],
@@ -136,7 +189,7 @@ fn try_coerce_types(
     let mut valid_types = valid_types;
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty() && matches!(type_signature, TypeSignature::UserDefined) {
+    if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -197,6 +250,27 @@ fn get_valid_types_with_aggregate_udf(
             .filter_map(|t| {
                 get_valid_types_with_aggregate_udf(t, current_types, func).ok()
             })
+            .flatten()
+            .collect::<Vec<_>>(),
+        _ => get_valid_types(signature, current_types)?,
+    };
+
+    Ok(valid_types)
+}
+
+fn get_valid_types_with_window_udf(
+    signature: &TypeSignature,
+    current_types: &[DataType],
+    func: &WindowUDF,
+) -> Result<Vec<Vec<DataType>>> {
+    let valid_types = match signature {
+        TypeSignature::UserDefined => match func.coerce_types(current_types) {
+            Ok(coerced_types) => vec![coerced_types],
+            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+        },
+        TypeSignature::OneOf(signatures) => signatures
+            .iter()
+            .filter_map(|t| get_valid_types_with_window_udf(t, current_types, func).ok())
             .flatten()
             .collect::<Vec<_>>(),
         _ => get_valid_types(signature, current_types)?,
@@ -336,6 +410,30 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Coercible(target_types) => {
+            if target_types.is_empty() {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if target_types.len() != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    target_types.len(),
+                    current_types.len()
+                );
+            }
+
+            for (data_type, target_type) in current_types.iter().zip(target_types.iter())
+            {
+                if !can_cast_types(data_type, target_type) {
+                    return plan_err!("{data_type} is not coercible to {target_type}");
+                }
+            }
+
+            vec![target_types.to_owned()]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
@@ -511,89 +609,48 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // coerced into type_into
-        (Int8, _) if matches!(type_from, Null | Int8) => Some(type_into.clone()),
-        (Int16, _) if matches!(type_from, Null | Int8 | Int16 | UInt8) => {
+        (Int8, Null | Int8) => Some(type_into.clone()),
+        (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
+        (Int32, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) => Some(type_into.clone()),
+        (Int64, Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32) => {
             Some(type_into.clone())
         }
-        (Int32, _)
-            if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) =>
-        {
-            Some(type_into.clone())
-        }
-        (Int64, _)
-            if matches!(
-                type_from,
-                Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (UInt8, _) if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
-        (UInt16, _) if matches!(type_from, Null | UInt8 | UInt16) => {
-            Some(type_into.clone())
-        }
-        (UInt32, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
-            Some(type_into.clone())
-        }
-        (UInt64, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
-            Some(type_into.clone())
-        }
-        (Float32, _)
-            if matches!(
-                type_from,
-                Null | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Float32
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Float64, _)
-            if matches!(
-                type_from,
-                Null | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Float32
-                    | Float64
-                    | Decimal128(_, _)
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Timestamp(TimeUnit::Nanosecond, None), _)
-            if matches!(
-                type_from,
-                Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
-            Some(type_into.clone())
-        }
+        (UInt8, Null | UInt8) => Some(type_into.clone()),
+        (UInt16, Null | UInt8 | UInt16) => Some(type_into.clone()),
+        (UInt32, Null | UInt8 | UInt16 | UInt32) => Some(type_into.clone()),
+        (UInt64, Null | UInt8 | UInt16 | UInt32 | UInt64) => Some(type_into.clone()),
+        (
+            Float32,
+            Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            | Float32,
+        ) => Some(type_into.clone()),
+        (
+            Float64,
+            Null
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float32
+            | Float64
+            | Decimal128(_, _),
+        ) => Some(type_into.clone()),
+        (
+            Timestamp(TimeUnit::Nanosecond, None),
+            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+        ) => Some(type_into.clone()),
+        (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
-            Some(type_into.clone())
-        }
+        (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        (List(_), _) if matches!(type_from, FixedSizeList(_, _)) => {
-            Some(type_into.clone())
-        }
+        (List(_), FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
@@ -604,18 +661,16 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // should be able to coerce wildcard fixed size list to non wildcard fixed size list
-        (FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD), _) => match type_from {
-            FixedSizeList(f_from, size_from) => {
-                match coerced_from(f_into.data_type(), f_from.data_type()) {
-                    Some(data_type) if &data_type != f_into.data_type() => {
-                        let new_field =
-                            Arc::new(f_into.as_ref().clone().with_data_type(data_type));
-                        Some(FixedSizeList(new_field, *size_from))
-                    }
-                    Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
-                    _ => None,
-                }
+        (
+            FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD),
+            FixedSizeList(f_from, size_from),
+        ) => match coerced_from(f_into.data_type(), f_from.data_type()) {
+            Some(data_type) if &data_type != f_into.data_type() => {
+                let new_field =
+                    Arc::new(f_into.as_ref().clone().with_data_type(data_type));
+                Some(FixedSizeList(new_field, *size_from))
             }
+            Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
             _ => None,
         },
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
@@ -630,12 +685,7 @@ fn coerced_from<'a>(
                 _ => None,
             }
         }
-        (Timestamp(_, Some(_)), _)
-            if matches!(
-                type_from,
-                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
-            ) =>
-        {
+        (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
         _ => None,

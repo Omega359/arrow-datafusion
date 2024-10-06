@@ -165,7 +165,7 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![self.order_requirement.clone()]
     }
 
@@ -286,3 +286,5 @@ fn require_top_ordering_helper(
         Ok((plan, false))
     }
 }
+
+// See tests in datafusion/core/tests/physical_optimizer

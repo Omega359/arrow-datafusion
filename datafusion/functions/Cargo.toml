@@ -54,7 +54,7 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["uuid"]
+string_expressions = ["regex_expressions", "uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
@@ -104,6 +104,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "encoding"
+required-features = ["encoding_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
@@ -146,3 +151,33 @@ required-features = ["string_expressions"]
 harness = false
 name = "upper"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "pad"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "repeat"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "random"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "substr"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "character_length"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "strpos"
+required-features = ["unicode_expressions"]

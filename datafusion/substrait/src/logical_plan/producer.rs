@@ -16,7 +16,6 @@
 // under the License.
 
 use itertools::Itertools;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow_buffer::ToByteSlice;
@@ -38,15 +37,13 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+    substrait_err, DFSchemaRef, ToDFSchema,
 };
-use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, Sort, WindowFunction,
@@ -55,15 +52,18 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
-    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map, Struct,
-    UserDefined,
+    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map,
+    PrecisionTimestamp, Struct, UserDefined,
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::read_rel::VirtualTable;
-use substrait::proto::{CrossRel, ExchangeRel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::{rel_common, CrossRel, ExchangeRel, RelCommon};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -141,19 +141,13 @@ pub fn to_substrait_rel(
                 maintain_singular_struct: false,
             });
 
+            let table_schema = scan.source.schema().to_dfschema_ref()?;
+            let base_schema = to_substrait_named_struct(&table_schema, extensions)?;
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(NamedStruct {
-                        names: scan
-                            .source
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().to_owned())
-                            .collect(),
-                        r#struct: None,
-                    }),
+                    base_schema: Some(base_schema),
                     filter: None,
                     best_effort_filter: None,
                     projection,
@@ -227,9 +221,20 @@ pub fn to_substrait_rel(
                 .iter()
                 .map(|e| to_substrait_rex(ctx, e, p.input.schema(), 0, extensions))
                 .collect::<Result<Vec<_>>>()?;
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                p.input.as_ref().schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
-                    common: None,
+                    common: Some(common),
                     input: Some(to_substrait_rel(p.input.as_ref(), ctx, extensions)?),
                     expressions,
                     advanced_extension: None,
@@ -440,29 +445,15 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extensions)?;
-            // If the input is a Project relation, we can just append the WindowFunction expressions
-            // before returning
-            // Otherwise, wrap the input in a Project relation before appending the WindowFunction
-            // expressions
-            let mut project_rel: Box<ProjectRel> = match &input.as_ref().rel_type {
-                Some(RelType::Project(p)) => Box::new(*p.clone()),
-                _ => {
-                    // Create Projection with field referencing all output fields in the input relation
-                    let expressions = (0..window.input.schema().fields().len())
-                        .map(substrait_field_ref)
-                        .collect::<Result<Vec<_>>>()?;
-                    Box::new(ProjectRel {
-                        common: None,
-                        input: Some(input),
-                        expressions,
-                        advanced_extension: None,
-                    })
-                }
-            };
-            // Parse WindowFunction expression
-            let mut window_exprs = vec![];
+
+            // create a field reference for each input field
+            let mut expressions = (0..window.input.schema().fields().len())
+                .map(substrait_field_ref)
+                .collect::<Result<Vec<_>>>()?;
+
+            // process and add each window function expression
             for expr in &window.window_expr {
-                window_exprs.push(to_substrait_rex(
+                expressions.push(to_substrait_rex(
                     ctx,
                     expr,
                     window.input.schema(),
@@ -470,8 +461,23 @@ pub fn to_substrait_rel(
                     extensions,
                 )?);
             }
-            // Append parsed WindowFunction expressions
-            project_rel.expressions.extend(window_exprs);
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                window.input.schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+            let project_rel = Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(input),
+                expressions,
+                advanced_extension: None,
+            });
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
             }))
@@ -559,6 +565,19 @@ pub fn to_substrait_rel(
         }
         _ => not_impl_err!("Unsupported operator: {plan}"),
     }
+}
+
+/// By default, a Substrait Project outputs all input fields followed by all expressions.
+/// A DataFusion Projection only outputs expressions. In order to keep the Substrait
+/// plan consistent with DataFusion, we must apply an output mapping that skips the input
+/// fields so that the Substrait Project will only output the expression fields.
+fn create_project_remapping(expr_count: usize, input_field_count: usize) -> EmitKind {
+    let expression_field_start = input_field_count;
+    let expression_field_end = expression_field_start + expr_count;
+    let output_mapping = (expression_field_start..expression_field_end)
+        .map(|i| i as i32)
+        .collect();
+    Emit(rel_common::Emit { output_mapping })
 }
 
 fn to_substrait_named_struct(
@@ -658,8 +677,8 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::Left => join_rel::JoinType::Left,
         JoinType::Right => join_rel::JoinType::Right,
         JoinType::Full => join_rel::JoinType::Outer,
-        JoinType::LeftAnti => join_rel::JoinType::Anti,
-        JoinType::LeftSemi => join_rel::JoinType::Semi,
+        JoinType::LeftAnti => join_rel::JoinType::LeftAnti,
+        JoinType::LeftSemi => join_rel::JoinType::LeftSemi,
         JoinType::RightAnti | JoinType::RightSemi => unimplemented!(),
     }
 }
@@ -809,31 +828,20 @@ pub fn to_substrait_agg_measure(
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(sort) => {
-            let sort_kind = match (sort.asc, sort.nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(to_substrait_rex(
-                    ctx,
-                    sort.expr.deref(),
-                    schema,
-                    0,
-                    extensions,
-                )?),
-                sort_kind: Some(SortKind::Direction(sort_kind.into())),
-            })
-        }
-        _ => exec_err!("expects to receive sort expression"),
-    }
+    let sort_kind = match (sort.asc, sort.nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(to_substrait_rex(ctx, &sort.expr, schema, 0, extensions)?),
+        sort_kind: Some(SortKind::Direction(sort_kind.into())),
+    })
 }
 
 /// Return Substrait scalar function with two arguments
@@ -1376,20 +1384,31 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
-        // Timezone is ignored.
-        DataType::Timestamp(unit, _) => {
-            let type_variation_reference = match unit {
-                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        DataType::Timestamp(unit, tz) => {
+            let precision = match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
             };
-            Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference,
+            let kind = match tz {
+                None => r#type::Kind::PrecisionTimestamp(r#type::PrecisionTimestamp {
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
-                })),
-            })
+                    precision,
+                }),
+                Some(_) => {
+                    // If timezone is present, no matter what the actual tz value is, it indicates the
+                    // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+                    // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+                    r#type::Kind::PrecisionTimestampTz(r#type::PrecisionTimestampTz {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability,
+                        precision,
+                    })
+                }
+            };
+            Ok(substrait::proto::Type { kind: Some(kind) })
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
@@ -1415,6 +1434,7 @@ fn to_substrait_type(
                     kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                         nullability,
+                        precision: Some(3), // DayTime precision is always milliseconds
                     })),
                 }),
                 IntervalUnit::MonthDayNano => {
@@ -1451,6 +1471,12 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::BinaryView => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
@@ -1460,6 +1486,12 @@ fn to_substrait_type(
         DataType::LargeUtf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::Utf8View => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
@@ -1798,21 +1830,64 @@ fn to_substrait_literal(
         ScalarValue::Float64(Some(f)) => {
             (LiteralType::Fp64(*f), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::TimestampSecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+        ScalarValue::TimestampSecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 0,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMillisecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMillisecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 3,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMicrosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMicrosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 6,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampNanosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampNanosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 9,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        // If timezone is present, no matter what the actual tz value is, it indicates the
+        // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+        // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+        ScalarValue::TimestampSecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 0,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMillisecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 3,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMicrosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 6,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampNanosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 9,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::Date32(Some(d)) => {
             (LiteralType::Date(*d), DATE_32_TYPE_VARIATION_REF)
@@ -1847,7 +1922,8 @@ fn to_substrait_literal(
             LiteralType::IntervalDayToSecond(IntervalDayToSecond {
                 days: i.days,
                 seconds: i.milliseconds / 1000,
-                microseconds: (i.milliseconds % 1000) * 1000,
+                subseconds: (i.milliseconds % 1000) as i64,
+                precision_mode: Some(PrecisionMode::Precision(3)), // 3 for milliseconds
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
@@ -1858,6 +1934,10 @@ fn to_substrait_literal(
         ScalarValue::LargeBinary(Some(b)) => (
             LiteralType::Binary(b.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::BinaryView(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::FixedSizeBinary(_, Some(b)) => (
             LiteralType::FixedBinary(b.clone()),
@@ -1870,6 +1950,10 @@ fn to_substrait_literal(
         ScalarValue::LargeUtf8(Some(s)) => (
             LiteralType::String(s.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Utf8View(Some(s)) => (
+            LiteralType::String(s.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
@@ -2052,30 +2136,26 @@ fn try_to_substrait_field_reference(
 
 fn substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
-            let d = match (asc, nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(e),
-                sort_kind: Some(SortKind::Direction(d as i32)),
-            })
-        }
-        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
-    }
+    let Sort {
+        expr,
+        asc,
+        nulls_first,
+    } = sort;
+    let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
+    let d = match (asc, nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(e),
+        sort_kind: Some(SortKind::Direction(d as i32)),
+    })
 }
 
 fn substrait_field_ref(index: usize) -> Result<Expression> {
@@ -2141,6 +2221,18 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(None))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
+
+        for (ts, tz) in [
+            (Some(12345), None),
+            (None, None),
+            (Some(12345), Some("UTC".into())),
+            (None, Some("UTC".into())),
+        ] {
+            round_trip_literal(ScalarValue::TimestampSecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMillisecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
+        }
 
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
@@ -2271,17 +2363,23 @@ mod test {
         round_trip_type(DataType::UInt64)?;
         round_trip_type(DataType::Float32)?;
         round_trip_type(DataType::Float64)?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Second, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+
+        for tz in [None, Some("UTC".into())] {
+            round_trip_type(DataType::Timestamp(TimeUnit::Second, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, tz))?;
+        }
+
         round_trip_type(DataType::Date32)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Binary)?;
         round_trip_type(DataType::FixedSizeBinary(10))?;
         round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::BinaryView)?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Utf8View)?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 

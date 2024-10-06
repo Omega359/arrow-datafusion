@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::utils::{compare_rows, get_row_at_idx, take_arrays};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
@@ -32,7 +32,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
-    Signature, TypeSignature, Volatility,
+    Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -40,7 +40,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 create_func!(FirstValue, first_value_udaf);
 
 /// Returns the first value in a group of values.
-pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
+pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
     if let Some(order_by) = order_by {
         first_value_udaf()
             .call(vec![expression])
@@ -310,7 +310,7 @@ impl Accumulator for FirstValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            get_arrayref_at_indices(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices)?
         };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
@@ -613,7 +613,7 @@ impl Accumulator for LastValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            get_arrayref_at_indices(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices)?
         };
 
         if !ordered_states[0].is_empty() {

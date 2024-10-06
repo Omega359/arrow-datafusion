@@ -19,9 +19,10 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    Dependency, Result,
+    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    DFSchema, Dependency, Result,
 };
+use datafusion_expr::expr::WildcardOptions;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -38,11 +39,14 @@ use sqlparser::ast::{
 use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
+///
+/// Returns `None` if no valid matches are found. This happens when there are no
+/// functions registered with the context.
 pub fn suggest_valid_function(
     input_function_name: &str,
     is_window_func: bool,
     ctx: &dyn ContextProvider,
-) -> String {
+) -> Option<String> {
     let valid_funcs = if is_window_func {
         // All aggregate functions and builtin window functions
         let mut funcs = Vec::new();
@@ -65,18 +69,15 @@ pub fn suggest_valid_function(
 }
 
 /// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitive)
-/// Input `candidates` must not be empty otherwise it will panic
-fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
+/// Input `candidates` must not be empty otherwise an error is returned.
+fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
     let target = target.to_lowercase();
-    candidates
-        .into_iter()
-        .min_by_key(|candidate| {
-            datafusion_common::utils::datafusion_strsim::levenshtein(
-                &candidate.to_lowercase(),
-                &target,
-            )
-        })
-        .expect("No candidates provided.") // Panic if `candidates` argument is empty
+    candidates.into_iter().min_by_key(|candidate| {
+        datafusion_common::utils::datafusion_strsim::levenshtein(
+            &candidate.to_lowercase(),
+            &target,
+        )
+    })
 }
 
 /// Arguments to for a function call extracted from the SQL AST
@@ -244,8 +245,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build Unnest expression
         if name.eq("unnest") {
-            let mut exprs =
-                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
                 return plan_err!("unnest() requires exactly one argument");
             }
@@ -282,18 +282,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let func_deps = schema.functional_dependencies();
             // Find whether ties are possible in the given ordering
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
-                if let Expr::Sort(sort_expr) = orderby_expr {
-                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).ok()?;
-                        return if func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx]
-                                && dep.mode == Dependency::Single
-                        }) {
-                            Some(true)
-                        } else {
-                            Some(false)
-                        };
-                    }
+                if let Expr::Column(col) = &orderby_expr.expr {
+                    let idx = schema.index_of_column(col).ok()?;
+                    return if func_deps.iter().any(|dep| {
+                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                    }) {
+                        Some(true)
+                    } else {
+                        Some(false)
+                    };
                 }
                 Some(false)
             });
@@ -356,9 +353,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // Could not find the relevant function, so return an error
-        let suggested_func_name =
-            suggest_valid_function(&name, is_function_window, self.context_provider);
-        plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
+        if let Some(suggested_func_name) =
+            suggest_valid_function(&name, is_function_window, self.context_provider)
+        {
+            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
+        } else {
+            internal_err!("No functions registered with this context.")
+        }
     }
 
     pub(super) fn sql_fn_name_to_expr(
@@ -420,12 +421,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard { qualifier: None }),
+            } => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                Ok(Expr::Wildcard { qualifier: None })
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
+            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
+                let qualifier = self.object_name_to_table_reference(object_name)?;
+                // sanity check on qualifier with schema
+                let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+                if qualified_indices.is_empty() {
+                    return plan_err!("Invalid qualifier {qualifier}");
+                }
+                Ok(Expr::Wildcard {
+                    qualifier: Some(qualifier),
+                    options: WildcardOptions::default(),
+                })
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }

@@ -22,7 +22,6 @@ use std::sync::Arc;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -30,7 +29,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PropagateEmptyRelation;
 
 impl PropagateEmptyRelation {
@@ -184,7 +183,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 } else if new_inputs.len() == 1 {
                     let mut new_inputs = new_inputs;
                     let input_plan = new_inputs.pop().unwrap(); // length checked
-                    let child = unwrap_arc(input_plan);
+                    let child = Arc::unwrap_or_clone(input_plan);
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
@@ -250,10 +249,10 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{Column, DFSchema, JoinType, ScalarValue};
+    use datafusion_common::{Column, DFSchema, JoinType};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, Operator,
+        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Operator,
     };
 
     use crate::eliminate_filter::EliminateFilter;
@@ -289,7 +288,7 @@ mod tests {
     #[test]
     fn propagate_empty() -> Result<()> {
         let plan = LogicalPlanBuilder::empty(false)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(true))))?
+            .filter(lit(true))?
             .limit(10, None)?
             .project(vec![binary_expr(lit(1), Operator::Plus, lit(1))])?
             .build()?;
@@ -305,7 +304,7 @@ mod tests {
         let right_table_scan = test_table_scan_with_name("test2")?;
         let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a")])?
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
 
         let plan = LogicalPlanBuilder::from(left)
@@ -325,7 +324,7 @@ mod tests {
     fn propagate_union_empty() -> Result<()> {
         let left = LogicalPlanBuilder::from(test_table_scan()?).build()?;
         let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
@@ -339,10 +338,10 @@ mod tests {
         let one =
             LogicalPlanBuilder::from(test_table_scan_with_name("test1")?).build()?;
         let two = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
         let three = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
         let four =
             LogicalPlanBuilder::from(test_table_scan_with_name("test4")?).build()?;
@@ -362,16 +361,16 @@ mod tests {
     #[test]
     fn propagate_union_all_empty() -> Result<()> {
         let one = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
         let two = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
         let three = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
         let four = LogicalPlanBuilder::from(test_table_scan_with_name("test4")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
 
         let plan = LogicalPlanBuilder::from(one)
@@ -389,7 +388,7 @@ mod tests {
         let one_schema = Schema::new(vec![Field::new("t1a", DataType::UInt32, false)]);
         let t1_scan = table_scan(Some("test1"), &one_schema, None)?.build()?;
         let one = LogicalPlanBuilder::from(t1_scan)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
 
         let two_schema = Schema::new(vec![Field::new("t2a", DataType::UInt32, false)]);
@@ -415,7 +414,7 @@ mod tests {
     fn propagate_union_alias() -> Result<()> {
         let left = LogicalPlanBuilder::from(test_table_scan()?).build()?;
         let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .filter(lit(false))?
             .build()?;
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
@@ -449,7 +448,7 @@ mod tests {
             let left_table_scan = test_table_scan()?;
 
             LogicalPlanBuilder::from(left_table_scan)
-                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .filter(lit(false))?
                 .build()
         } else {
             let scan = test_table_scan_with_name("left").unwrap();
@@ -460,7 +459,7 @@ mod tests {
             let right_table_scan = test_table_scan_with_name("right")?;
 
             LogicalPlanBuilder::from(right_table_scan)
-                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .filter(lit(false))?
                 .build()
         } else {
             let scan = test_table_scan_with_name("right").unwrap();
@@ -487,14 +486,14 @@ mod tests {
         let (left, right, join_type, expected) = if anti_left_join {
             let left = test_table_scan()?;
             let right = LogicalPlanBuilder::from(test_table_scan()?)
-                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .filter(lit(false))?
                 .build()?;
             let expected = left.display_indent().to_string();
             (left, right, JoinType::LeftAnti, expected)
         } else {
             let right = test_table_scan()?;
             let left = LogicalPlanBuilder::from(test_table_scan()?)
-                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .filter(lit(false))?
                 .build()?;
             let expected = right.display_indent().to_string();
             (left, right, JoinType::RightAnti, expected)

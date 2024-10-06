@@ -104,7 +104,7 @@ impl PartialSortExec {
         input: Arc<dyn ExecutionPlan>,
         common_prefix_length: usize,
     ) -> Self {
-        assert!(common_prefix_length > 0);
+        debug_assert!(common_prefix_length > 0);
         let preserve_partitioning = false;
         let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
@@ -238,6 +238,10 @@ impl ExecutionPlan for PartialSortExec {
         &self.cache
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]
@@ -285,7 +289,7 @@ impl ExecutionPlan for PartialSortExec {
 
         // Make sure common prefix length is larger than 0
         // Otherwise, we should use SortExec.
-        assert!(self.common_prefix_length > 0);
+        debug_assert!(self.common_prefix_length > 0);
 
         Ok(Box::pin(PartialSortStream {
             input,

@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "regx" DataFusion functions
+//! "regex" DataFusion functions
 
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+
 // create UDFs
 make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
@@ -65,7 +66,7 @@ pub mod expr_fn {
     }
 }
 
-#[doc = r" Return a list of all functions in this package"]
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
     vec![regexp_match(), regexp_like(), regexp_replace()]
 }
