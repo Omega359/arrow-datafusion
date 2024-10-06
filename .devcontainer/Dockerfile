@@ -35,7 +35,7 @@ LABEL \
 WORKDIR /apache_datafusion
 
 # Install Rust for the correct CPU architecture
-ARG RUST_VERSION=1.80.0
+ARG RUST_VERSION=1.81.0
 ARG RUSTUP_INIT_VERSION=1.27.1
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -63,10 +63,11 @@ RUN arch="$(uname -m)" && \
 # - protobuf-compiler for proto file compilation
 # - pkg-config, libssl-dev required for build
 # - npm - required to run prettier
+# - cmake - to build a dep
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
     apt-get -y upgrade && \
-    apt-get -y install unzip libxext6 libxext-dev libxtst-dev libxi-dev freetype* procps gdb build-essential clang libc6-dev musl-tools sccache mold vim protobuf-compiler pkg-config libssl-dev npm && \
+    apt-get -y install unzip libxext6 libxext-dev libxtst-dev libxi-dev freetype* procps gdb build-essential clang libc6-dev musl-tools sccache mold vim protobuf-compiler pkg-config libssl-dev npm cmake && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
