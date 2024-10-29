@@ -174,7 +174,7 @@ mod sp_repartition_fuzz_tests {
                 })
                 .unzip();
 
-            let sort_arrs = arrow::compute::lexsort(&sort_columns, None)?;
+            let sort_arrs = lexsort(&sort_columns, None)?;
             for (idx, arr) in izip!(indices, sort_arrs) {
                 schema_vec[idx] = Some(arr);
             }
@@ -358,7 +358,8 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .with_sort_information(vec![sort_keys.clone()]),
+                .try_with_sort_information(vec![sort_keys.clone()])
+                .unwrap(),
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 

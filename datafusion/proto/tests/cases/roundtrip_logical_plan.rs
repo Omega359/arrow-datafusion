@@ -47,7 +47,10 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
-use datafusion::functions_window::row_number::row_number;
+use datafusion::functions_window::expr_fn::{
+    cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
+};
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -75,6 +78,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -936,7 +940,18 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
         ),
+        cume_dist(),
         row_number(),
+        rank(),
+        dense_rank(),
+        percent_rank(),
+        lead(col("b"), None, None),
+        lead(col("b"), Some(2), None),
+        lead(col("b"), Some(2), Some(ScalarValue::from(100))),
+        lag(col("b"), None, None),
+        lag(col("b"), Some(2), None),
+        lag(col("b"), Some(2), Some(ScalarValue::from(100))),
+        ntile(lit(3)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -2156,7 +2171,7 @@ fn roundtrip_aggregate_udf() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2304,9 +2319,7 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2317,9 +2330,7 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2336,9 +2347,7 @@ fn roundtrip_window() {
     );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2386,7 +2395,7 @@ fn roundtrip_window() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2459,7 +2468,10 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
         }
 

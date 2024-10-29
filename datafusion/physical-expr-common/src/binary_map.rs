@@ -31,7 +31,7 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
-use std::mem;
+use std::mem::{size_of, swap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -104,8 +104,9 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// `Binary`, and `LargeBinary`) values that can produce the set of keys on
 /// output as `GenericBinaryArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringArray` / `BinaryArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -259,7 +260,7 @@ where
     /// the same output type
     pub fn take(&mut self) -> Self {
         let mut new_self = Self::new(self.output_type);
-        mem::swap(self, &mut new_self);
+        swap(self, &mut new_self);
         new_self
     }
 
@@ -544,7 +545,7 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         self.map_size
-            + self.buffer.capacity() * mem::size_of::<u8>()
+            + self.buffer.capacity() * size_of::<u8>()
             + self.offsets.allocated_size()
             + self.hashes_buffer.allocated_size()
     }
@@ -574,7 +575,7 @@ where
 }
 
 /// Maximum size of a value that can be inlined in the hash table
-const SHORT_VALUE_LEN: usize = mem::size_of::<usize>();
+const SHORT_VALUE_LEN: usize = size_of::<usize>();
 
 /// Entry in the hash table -- see [`ArrowBytesMap`] for more details
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]

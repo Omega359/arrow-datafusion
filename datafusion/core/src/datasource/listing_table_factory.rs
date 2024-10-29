@@ -91,7 +91,7 @@ impl TableProviderFactory for ListingTableFactory {
                         .field_with_name(col)
                         .map_err(|e| arrow_datafusion_err!(e))
                 })
-                .collect::<datafusion_common::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
                 .collect();
@@ -197,6 +197,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            temporary: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
@@ -236,6 +237,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            temporary: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,

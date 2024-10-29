@@ -20,13 +20,12 @@ mod tests {
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-    use datafusion_substrait::logical_plan::producer;
+    use datafusion_substrait::logical_plan::producer::to_substrait_plan;
     use datafusion_substrait::serializer;
 
     use datafusion::error::Result;
     use datafusion::prelude::*;
 
-    use datafusion_substrait::logical_plan::producer::to_substrait_plan;
     use std::fs;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
@@ -61,7 +60,7 @@ mod tests {
         let ctx = create_context().await?;
         let table = provider_as_source(ctx.table_provider("data").await?);
         let table_scan = LogicalPlanBuilder::scan("data", table, None)?.build()?;
-        let convert_result = producer::to_substrait_plan(&table_scan, &ctx);
+        let convert_result = to_substrait_plan(&table_scan, &ctx);
         assert!(convert_result.is_ok());
 
         Ok(())
@@ -117,8 +116,8 @@ mod tests {
         let datafusion_plan = df.into_optimized_plan()?;
         assert_eq!(
             format!("{}", datafusion_plan),
-            "Projection: data.b, RANK() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c\
-            \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+            "Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c\
+            \n  WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
             \n    TableScan: data projection=[a, b, c]",
         );
 

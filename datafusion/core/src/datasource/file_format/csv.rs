@@ -78,7 +78,7 @@ impl CsvFormatFactory {
     }
 }
 
-impl fmt::Debug for CsvFormatFactory {
+impl Debug for CsvFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CsvFormatFactory")
             .field("options", &self.options)
@@ -771,7 +771,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Int64",
+                "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8"
@@ -907,7 +907,7 @@ mod tests {
             Field::new("c7", DataType::Int64, true),
             Field::new("c8", DataType::Int64, true),
             Field::new("c9", DataType::Int64, true),
-            Field::new("c10", DataType::Int64, true),
+            Field::new("c10", DataType::Utf8, true),
             Field::new("c11", DataType::Float64, true),
             Field::new("c12", DataType::Float64, true),
             Field::new("c13", DataType::Utf8, true),
@@ -968,7 +968,7 @@ mod tests {
         limit: Option<usize>,
         has_header: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let root = format!("{}/csv", crate::test_util::arrow_test_data());
+        let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
         scan_format(state, &format, &root, file_name, projection, limit).await
     }
