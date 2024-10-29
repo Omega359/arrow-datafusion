@@ -35,7 +35,7 @@ LABEL \
 WORKDIR /apache_datafusion
 
 # Install Rust for the correct CPU architecture
-ARG RUST_VERSION=1.81.0
+ARG RUST_VERSION=1.82.0
 ARG RUSTUP_INIT_VERSION=1.27.1
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -76,8 +76,7 @@ ARG RUST_ANALYZER_VERSION=2024-07-01
 RUN wget -qO- "https://github.com/rust-analyzer/rust-analyzer/releases/download/${RUST_ANALYZER_VERSION}/rust-analyzer-$(uname -m)-unknown-linux-gnu.gz" | \
     gunzip > /usr/local/bin/rust-analyzer && \
     chmod 500 /usr/local/bin/rust-analyzer
-RUN rustup component add clippy rustfmt
-RUN rustup component add llvm-tools-preview
+RUN rustup component add clippy rustfmt llvm-tools-preview && cargo install cargo-nextest
 
 # Shell setup
 COPY .zshrc-specific .welcome.sh .ssh.sh /root/
