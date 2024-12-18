@@ -170,6 +170,13 @@ overflow-checks = false
 panic = 'unwind'
 rpath = false
 
+# ci turns off debug info to allow for smaller binaries making caching more effective
+[profile.ci]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+incremental = false
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"

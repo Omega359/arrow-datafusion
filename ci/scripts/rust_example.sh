@@ -19,7 +19,7 @@
 
 set -ex
 cd datafusion-examples/examples/
-cargo check --examples
+cargo check --profile ci --examples
 
 files=$(ls .)
 for filename in $files
@@ -27,7 +27,7 @@ do
   example_name=`basename $filename ".rs"`
   # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
-     cargo run --example $example_name
+     cargo run --profile ci --example $example_name
      cargo clean -p datafusion-examples
   fi
 done

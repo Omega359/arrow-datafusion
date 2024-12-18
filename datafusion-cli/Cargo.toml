@@ -69,3 +69,10 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
+
+# ci turns off debug info to allow for smaller binaries making caching more effective
+[profile.ci]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+incremental = false

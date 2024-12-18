@@ -22,6 +22,8 @@ runs:
   steps:
     - name: Run sccache-cache
       uses: mozilla-actions/sccache-action@v0.0.4
+    - name: Run rust cache
+      uses: Swatinem/rust-cache@v2
     - name: Configure runtime env
       shell: bash
       # do not produce debug symbols to keep memory usage down
