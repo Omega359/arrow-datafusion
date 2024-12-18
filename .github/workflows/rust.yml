@@ -275,7 +275,7 @@ jobs:
         with:
           rust-version: stable
       - name: Generate benchmark data and expected query results
-        -run: |
+        run: |
           mkdir -p datafusion/sqllogictest/test_files/tpch/data
           git clone https://github.com/databricks/tpch-dbgen.git
           cd tpch-dbgen
