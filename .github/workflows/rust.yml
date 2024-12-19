@@ -296,6 +296,8 @@ jobs:
     name: "Run sqllogictest with Postgres runner"
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     services:
       postgres:
         image: postgres:15
