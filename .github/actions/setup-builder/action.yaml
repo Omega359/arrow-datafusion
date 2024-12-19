@@ -44,6 +44,8 @@ runs:
       uses: ./.github/actions/setup-rust-runtime
     - name: Run rust cache
       uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "datafusion"
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash
