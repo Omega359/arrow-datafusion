@@ -63,14 +63,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "datafusion"
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Prepare cargo test (no-run)
+      - name: Prepare cargo build
         run: |
-          cargo nextest run --hide-progress-bar --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --no-run
-          cargo test --profile ci --workspace --lib --tests --bins --no-run
-      - name: Run preliminary cargo check
-        run: cargo check --profile ci --all-targets
+          cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --no-run
+          cargo check --profile ci --all-targets
 
   # cargo check common, functions and substrait with no default features
   linux-cargo-check-no-default-features:
