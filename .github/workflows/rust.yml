@@ -324,8 +324,10 @@ jobs:
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
+          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
         env:
+          # use postgres for the host here because we have specified a container for the job
+          POSTGRES_HOST: postgres
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
 #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
@@ -386,6 +388,7 @@ jobs:
         shell: bash
         run: |
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
+          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
           cd datafusion-cli
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
 
@@ -425,6 +428,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Run gen
         run: ./regen.sh
         working-directory: ./datafusion/proto
