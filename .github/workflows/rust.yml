@@ -195,7 +195,7 @@ jobs:
       - name: Run examples
         run: |
           # test datafusion-sql examples
-          cargo run --example sql
+          cargo run --profile ci --example sql
           # test datafusion-examples
           ci/scripts/rust_example.sh
       - name: Verify Working Directory Clean
@@ -347,25 +347,26 @@ jobs:
 #          cd datafusion-cli
 #          cargo test --lib --tests --bins --all-features
 
-  macos:
-    name: cargo test (macos)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Run tests (excluding doctests)
-        shell: bash
-        run: |
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
-          cd datafusion-cli
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
+# Commenting out intel mac build as so few users would ever use it
+#  macos:
+#    name: cargo test (macos)
+#    runs-on: macos-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#          fetch-depth: 1
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-macos-builder
+#      - name: Install nextest
+#        uses: taiki-e/install-action@nextest
+#      - name: Run tests (excluding doctests)
+#        shell: bash
+#        run: |
+#          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
+#          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
+#          cd datafusion-cli
+#          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
 
   macos-aarch64:
     name: cargo test (macos-aarch64)

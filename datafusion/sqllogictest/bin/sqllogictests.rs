@@ -272,7 +272,7 @@ async fn run_tests() -> Result<()> {
     m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
-    if options.postgres_runner {
+    if options.postgres_runner && !is_pg_uri_set() {
         POSTGRES_IN.tx.send(ContainerCommands::Stop).unwrap_or(());
         POSTGRES_STOPPED.rx.lock().await.recv().await;
     }
