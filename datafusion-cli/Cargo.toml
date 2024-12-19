@@ -79,3 +79,4 @@ incremental = false
 debug = false
 debug-assertions = false
 strip = "debuginfo"
+incremental = false
