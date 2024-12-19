@@ -79,4 +79,3 @@ incremental = false
 debug = false
 debug-assertions = false
 strip = "debuginfo"
-opt-level = "s"
