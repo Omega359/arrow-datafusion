@@ -75,6 +75,10 @@ postgres = [
     "tokio-postgres",
 ]
 
+# the following is required because in-container doesn't seem to pull this in correctly
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 env_logger = { workspace = true }
 in-container = "^1"

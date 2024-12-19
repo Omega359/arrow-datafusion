@@ -149,7 +149,7 @@ jobs:
       - name: Run tests (excluding doctests)
         run: cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
       - name: Run sqllogictests
-        run: cargo test --profile ci --package datafusion-sqllogictest --tests sqllogictests
+        run: cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -284,8 +284,9 @@ jobs:
           mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
+          # increase stack size to fix stack overflow
+          export RUST_MIN_STACK=3048576
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          # use release build for plan verification because debug build causes stack overflow
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
           INCLUDE_TPCH=true cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
@@ -319,7 +320,9 @@ jobs:
           rustup toolchain install stable
           rustup default stable
       - name: Run sqllogictest
-        run: PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test --profile ci --package datafusion-sqllogictests --features=postgres --test sqllogictests
+        run: |
+          cd datafusion/sqllogictest
+          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
         env:
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
@@ -340,7 +343,7 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-          cargo test --profile ci --package datafusion-sqllogictest --tests sqllogictests
+          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
           cd datafusion-cli
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
 
@@ -360,7 +363,7 @@ jobs:
         shell: bash
         run: |
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-          cargo test --profile ci --package datafusion-sqllogictest --tests sqllogictests
+          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
           cd datafusion-cli
           cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
 
