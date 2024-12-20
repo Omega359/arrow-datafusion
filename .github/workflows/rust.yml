@@ -59,14 +59,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
       - name: Prepare cargo build
-        run: |
-          cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --no-run
-          cargo check --profile ci --all-targets
+        run: cargo check --profile ci --all-targets
 
   # cargo check common, functions and substrait with no default features
   linux-cargo-check-no-default-features:
@@ -81,11 +75,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Check datafusion without default features
         # Some of the test binaries require the parquet feature still
         #run: cargo check --all-targets --no-default-features -p datafusion
@@ -126,11 +115,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Check datafusion (nested_expressions)
         run: cargo check --profile ci --no-default-features --features=nested_expressions -p datafusion
 
@@ -166,11 +150,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Check datafusion-functions (crypto)
         run: cargo check --profile ci --all-targets --no-default-features --features=crypto_expressions -p datafusion-functions
 
@@ -205,11 +184,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run tests (excluding doctests)
@@ -234,11 +208,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run tests (excluding doctests)
@@ -263,11 +232,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -293,11 +257,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run doctests
         run: |
           cargo test --profile ci --doc --features avro,json
@@ -319,11 +278,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run cargo doc
         run: ci/scripts/rust_docs.sh
 
@@ -338,11 +292,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
@@ -365,11 +314,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Generate benchmark data and expected query results
         run: |
           mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -417,11 +361,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
@@ -483,10 +422,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion-macos-aarch64"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run tests (excluding doctests)
@@ -519,11 +454,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run datafusion-common tests
@@ -540,11 +470,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run gen
         run: ./regen.sh
         working-directory: ./datafusion/proto
@@ -562,11 +487,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Run
         run: |
           echo '' > datafusion/proto/src/generated/datafusion.rs
@@ -629,11 +549,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install Clippy
         run: rustup component add clippy
       - name: Run clippy
@@ -655,11 +570,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run tests
@@ -703,11 +613,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "datafusion"
-          save-if: "false"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
