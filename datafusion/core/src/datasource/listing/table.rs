@@ -470,6 +470,8 @@ impl ListingOptions {
         let files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
+            // Empty files cannot affect schema but may throw when trying to read for it
+            .try_filter(|object_meta| future::ready(object_meta.size > 0))
             .try_collect()
             .await?;
 
@@ -850,8 +852,13 @@ impl TableProvider for ListingTable {
             });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+
+        // We should not limit the number of partitioned files to scan if there are filters and limit
+        // at the same time. This is because the limit should be applied after the filters are applied.
+        let statistic_file_limit = if filters.is_empty() { limit } else { None };
+
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, limit)
+            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -1144,14 +1151,14 @@ impl ListingTable {
                     .infer_stats(
                         ctx,
                         store,
-                        self.file_schema.clone(),
+                        Arc::clone(&self.file_schema),
                         &part_file.object_meta,
                     )
                     .await?;
                 let statistics = Arc::new(statistics);
                 self.collected_statistics.put_with_extra(
                     &part_file.object_meta.location,
-                    statistics.clone(),
+                    Arc::clone(&statistics),
                     &part_file.object_meta,
                 );
                 Ok(statistics)

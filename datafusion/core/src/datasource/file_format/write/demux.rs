@@ -37,7 +37,7 @@ use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
     as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
@@ -100,7 +100,7 @@ pub(crate) fn start_demuxer_task(
     keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
-    let context = context.clone();
+    let context = Arc::clone(context);
     let single_file_output =
         !base_output_path.is_collection() && base_output_path.file_extension().is_some();
     let task = match partition_by {
@@ -438,10 +438,10 @@ fn compute_partition_keys_by_row<'a>(
                 )
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                 "it is not yet supported to write to hive partitions with datatype {}",
                 dtype
-            )))
+            )
             }
         }
 
@@ -478,7 +478,7 @@ fn remove_partition_by_columns(
         .zip(parted_batch.schema().fields())
         .filter_map(|(a, f)| {
             if !partition_names.contains(&f.name()) {
-                Some((a.clone(), (**f).clone()))
+                Some((Arc::clone(a), (**f).clone()))
             } else {
                 None
             }

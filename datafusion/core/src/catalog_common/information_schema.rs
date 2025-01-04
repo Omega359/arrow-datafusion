@@ -34,11 +34,11 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_array::builder::BooleanBuilder;
+use arrow_array::builder::{BooleanBuilder, UInt8Builder};
 use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, WindowUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
@@ -50,10 +50,18 @@ pub(crate) const COLUMNS: &str = "columns";
 pub(crate) const DF_SETTINGS: &str = "df_settings";
 pub(crate) const SCHEMATA: &str = "schemata";
 pub(crate) const ROUTINES: &str = "routines";
+pub(crate) const PARAMETERS: &str = "parameters";
 
 /// All information schema tables
-pub const INFORMATION_SCHEMA_TABLES: &[&str] =
-    &[TABLES, VIEWS, COLUMNS, DF_SETTINGS, SCHEMATA, ROUTINES];
+pub const INFORMATION_SCHEMA_TABLES: &[&str] = &[
+    TABLES,
+    VIEWS,
+    COLUMNS,
+    DF_SETTINGS,
+    SCHEMATA,
+    ROUTINES,
+    PARAMETERS,
+];
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -239,6 +247,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "SCALAR",
                     udf.documentation().map(|d| d.description.to_string()),
+                    udf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -258,6 +267,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "AGGREGATE",
                     udaf.documentation().map(|d| d.description.to_string()),
+                    udaf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -277,6 +287,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "WINDOW",
                     udwf.documentation().map(|d| d.description.to_string()),
+                    udwf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -285,6 +296,108 @@ impl InformationSchemaConfig {
 
     fn is_deterministic(signature: &Signature) -> bool {
         signature.volatility == Volatility::Immutable
+    }
+    fn make_parameters(
+        &self,
+        udfs: &HashMap<String, Arc<ScalarUDF>>,
+        udafs: &HashMap<String, Arc<AggregateUDF>>,
+        udwfs: &HashMap<String, Arc<WindowUDF>>,
+        config_options: &ConfigOptions,
+        builder: &mut InformationSchemaParametersBuilder,
+    ) -> Result<()> {
+        let catalog_name = &config_options.catalog.default_catalog;
+        let schema_name = &config_options.catalog.default_schema;
+        let mut add_parameters = |func_name: &str,
+                                  args: Option<&Vec<(String, String)>>,
+                                  arg_types: Vec<String>,
+                                  return_type: Option<String>,
+                                  is_variadic: bool,
+                                  rid: u8| {
+            for (position, type_name) in arg_types.iter().enumerate() {
+                let param_name =
+                    args.and_then(|a| a.get(position).map(|arg| arg.0.as_str()));
+                builder.add_parameter(
+                    catalog_name,
+                    schema_name,
+                    func_name,
+                    position as u64 + 1,
+                    "IN",
+                    param_name,
+                    type_name,
+                    None::<&str>,
+                    is_variadic,
+                    rid,
+                );
+            }
+            if let Some(return_type) = return_type {
+                builder.add_parameter(
+                    catalog_name,
+                    schema_name,
+                    func_name,
+                    1,
+                    "OUT",
+                    None::<&str>,
+                    return_type.as_str(),
+                    None::<&str>,
+                    false,
+                    rid,
+                );
+            }
+        };
+
+        for (func_name, udf) in udfs {
+            let args = udf.documentation().and_then(|d| d.arguments.clone());
+            let combinations = get_udf_args_and_return_types(udf)?;
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
+                add_parameters(
+                    func_name,
+                    args.as_ref(),
+                    arg_types,
+                    return_type,
+                    Self::is_variadic(udf.signature()),
+                    rid as u8,
+                );
+            }
+        }
+
+        for (func_name, udaf) in udafs {
+            let args = udaf.documentation().and_then(|d| d.arguments.clone());
+            let combinations = get_udaf_args_and_return_types(udaf)?;
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
+                add_parameters(
+                    func_name,
+                    args.as_ref(),
+                    arg_types,
+                    return_type,
+                    Self::is_variadic(udaf.signature()),
+                    rid as u8,
+                );
+            }
+        }
+
+        for (func_name, udwf) in udwfs {
+            let args = udwf.documentation().and_then(|d| d.arguments.clone());
+            let combinations = get_udwf_args_and_return_types(udwf)?;
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
+                add_parameters(
+                    func_name,
+                    args.as_ref(),
+                    arg_types,
+                    return_type,
+                    Self::is_variadic(udwf.signature()),
+                    rid as u8,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_variadic(signature: &Signature) -> bool {
+        matches!(
+            signature.type_signature,
+            TypeSignature::Variadic(_) | TypeSignature::VariadicAny
+        )
     }
 }
 
@@ -384,11 +497,12 @@ impl SchemaProvider for InformationSchemaProvider {
             DF_SETTINGS => Arc::new(InformationSchemaDfSettings::new(config)),
             SCHEMATA => Arc::new(InformationSchemata::new(config)),
             ROUTINES => Arc::new(InformationSchemaRoutines::new(config)),
+            PARAMETERS => Arc::new(InformationSchemaParameters::new(config)),
             _ => return Ok(None),
         };
 
         Ok(Some(Arc::new(
-            StreamingTable::try_new(table.schema().clone(), vec![table]).unwrap(),
+            StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
         )))
     }
 
@@ -421,7 +535,7 @@ impl InformationSchemaTables {
             schema_names: StringBuilder::new(),
             table_names: StringBuilder::new(),
             table_types: StringBuilder::new(),
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
         }
     }
 }
@@ -435,7 +549,7 @@ impl PartitionStream for InformationSchemaTables {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
                 config.make_tables(&mut builder).await?;
@@ -477,7 +591,7 @@ impl InformationSchemaTablesBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.catalog_names.finish()),
                 Arc::new(self.schema_names.finish()),
@@ -513,7 +627,7 @@ impl InformationSchemaViews {
             schema_names: StringBuilder::new(),
             table_names: StringBuilder::new(),
             definitions: StringBuilder::new(),
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
         }
     }
 }
@@ -527,7 +641,7 @@ impl PartitionStream for InformationSchemaViews {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
                 config.make_views(&mut builder).await?;
@@ -565,7 +679,7 @@ impl InformationSchemaViewBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.catalog_names.finish()),
                 Arc::new(self.schema_names.finish()),
@@ -628,7 +742,7 @@ impl InformationSchemaColumns {
             numeric_scales: UInt64Builder::with_capacity(default_capacity),
             datetime_precisions: UInt64Builder::with_capacity(default_capacity),
             interval_types: StringBuilder::new(),
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
         }
     }
 }
@@ -642,7 +756,7 @@ impl PartitionStream for InformationSchemaColumns {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
                 config.make_columns(&mut builder).await?;
@@ -771,7 +885,7 @@ impl InformationSchemaColumnsBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.catalog_names.finish()),
                 Arc::new(self.schema_names.finish()),
@@ -816,7 +930,7 @@ impl InformationSchemata {
 
     fn builder(&self) -> InformationSchemataBuilder {
         InformationSchemataBuilder {
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             catalog_name: StringBuilder::new(),
             schema_name: StringBuilder::new(),
             schema_owner: StringBuilder::new(),
@@ -862,7 +976,7 @@ impl InformationSchemataBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.catalog_name.finish()),
                 Arc::new(self.schema_name.finish()),
@@ -886,7 +1000,7 @@ impl PartitionStream for InformationSchemata {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
                 config.make_schemata(&mut builder).await;
@@ -918,7 +1032,7 @@ impl InformationSchemaDfSettings {
             names: StringBuilder::new(),
             values: StringBuilder::new(),
             descriptions: StringBuilder::new(),
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
         }
     }
 }
@@ -932,7 +1046,7 @@ impl PartitionStream for InformationSchemaDfSettings {
         let config = self.config.clone();
         let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
@@ -959,7 +1073,7 @@ impl InformationSchemaDfSettingsBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.names.finish()),
                 Arc::new(self.values.finish()),
@@ -990,6 +1104,7 @@ impl InformationSchemaRoutines {
             Field::new("data_type", DataType::Utf8, true),
             Field::new("function_type", DataType::Utf8, true),
             Field::new("description", DataType::Utf8, true),
+            Field::new("syntax_example", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -997,7 +1112,7 @@ impl InformationSchemaRoutines {
 
     fn builder(&self) -> InformationSchemaRoutinesBuilder {
         InformationSchemaRoutinesBuilder {
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             specific_catalog: StringBuilder::new(),
             specific_schema: StringBuilder::new(),
             specific_name: StringBuilder::new(),
@@ -1009,6 +1124,7 @@ impl InformationSchemaRoutines {
             data_type: StringBuilder::new(),
             function_type: StringBuilder::new(),
             description: StringBuilder::new(),
+            syntax_example: StringBuilder::new(),
         }
     }
 }
@@ -1026,6 +1142,7 @@ struct InformationSchemaRoutinesBuilder {
     data_type: StringBuilder,
     function_type: StringBuilder,
     description: StringBuilder,
+    syntax_example: StringBuilder,
 }
 
 impl InformationSchemaRoutinesBuilder {
@@ -1040,6 +1157,7 @@ impl InformationSchemaRoutinesBuilder {
         data_type: Option<impl AsRef<str>>,
         function_type: impl AsRef<str>,
         description: Option<impl AsRef<str>>,
+        syntax_example: Option<impl AsRef<str>>,
     ) {
         self.specific_catalog.append_value(catalog_name.as_ref());
         self.specific_schema.append_value(schema_name.as_ref());
@@ -1052,11 +1170,12 @@ impl InformationSchemaRoutinesBuilder {
         self.data_type.append_option(data_type.as_ref());
         self.function_type.append_value(function_type.as_ref());
         self.description.append_option(description);
+        self.syntax_example.append_option(syntax_example);
     }
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.specific_catalog.finish()),
                 Arc::new(self.specific_schema.finish()),
@@ -1069,6 +1188,7 @@ impl InformationSchemaRoutinesBuilder {
                 Arc::new(self.data_type.finish()),
                 Arc::new(self.function_type.finish()),
                 Arc::new(self.description.finish()),
+                Arc::new(self.syntax_example.finish()),
             ],
         )
         .unwrap()
@@ -1084,9 +1204,141 @@ impl PartitionStream for InformationSchemaRoutines {
         let config = self.config.clone();
         let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             futures::stream::once(async move {
                 config.make_routines(
+                    ctx.scalar_functions(),
+                    ctx.aggregate_functions(),
+                    ctx.window_functions(),
+                    ctx.session_config().options(),
+                    &mut builder,
+                )?;
+                Ok(builder.finish())
+            }),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct InformationSchemaParameters {
+    schema: SchemaRef,
+    config: InformationSchemaConfig,
+}
+
+impl InformationSchemaParameters {
+    fn new(config: InformationSchemaConfig) -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("specific_catalog", DataType::Utf8, false),
+            Field::new("specific_schema", DataType::Utf8, false),
+            Field::new("specific_name", DataType::Utf8, false),
+            Field::new("ordinal_position", DataType::UInt64, false),
+            Field::new("parameter_mode", DataType::Utf8, false),
+            Field::new("parameter_name", DataType::Utf8, true),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("parameter_default", DataType::Utf8, true),
+            Field::new("is_variadic", DataType::Boolean, false),
+            // `rid` (short for `routine id`) is used to differentiate parameters from different signatures
+            // (It serves as the group-by key when generating the `SHOW FUNCTIONS` query).
+            // For example, the following signatures have different `rid` values:
+            //     - `datetrunc(Utf8, Timestamp(Microsecond, Some("+TZ"))) -> Timestamp(Microsecond, Some("+TZ"))`
+            //     - `datetrunc(Utf8View, Timestamp(Nanosecond, None)) -> Timestamp(Nanosecond, None)`
+            Field::new("rid", DataType::UInt8, false),
+        ]));
+
+        Self { schema, config }
+    }
+
+    fn builder(&self) -> InformationSchemaParametersBuilder {
+        InformationSchemaParametersBuilder {
+            schema: Arc::clone(&self.schema),
+            specific_catalog: StringBuilder::new(),
+            specific_schema: StringBuilder::new(),
+            specific_name: StringBuilder::new(),
+            ordinal_position: UInt64Builder::new(),
+            parameter_mode: StringBuilder::new(),
+            parameter_name: StringBuilder::new(),
+            data_type: StringBuilder::new(),
+            parameter_default: StringBuilder::new(),
+            is_variadic: BooleanBuilder::new(),
+            rid: UInt8Builder::new(),
+        }
+    }
+}
+
+struct InformationSchemaParametersBuilder {
+    schema: SchemaRef,
+    specific_catalog: StringBuilder,
+    specific_schema: StringBuilder,
+    specific_name: StringBuilder,
+    ordinal_position: UInt64Builder,
+    parameter_mode: StringBuilder,
+    parameter_name: StringBuilder,
+    data_type: StringBuilder,
+    parameter_default: StringBuilder,
+    is_variadic: BooleanBuilder,
+    rid: UInt8Builder,
+}
+
+impl InformationSchemaParametersBuilder {
+    #[allow(clippy::too_many_arguments)]
+    fn add_parameter(
+        &mut self,
+        specific_catalog: impl AsRef<str>,
+        specific_schema: impl AsRef<str>,
+        specific_name: impl AsRef<str>,
+        ordinal_position: u64,
+        parameter_mode: impl AsRef<str>,
+        parameter_name: Option<impl AsRef<str>>,
+        data_type: impl AsRef<str>,
+        parameter_default: Option<impl AsRef<str>>,
+        is_variadic: bool,
+        rid: u8,
+    ) {
+        self.specific_catalog
+            .append_value(specific_catalog.as_ref());
+        self.specific_schema.append_value(specific_schema.as_ref());
+        self.specific_name.append_value(specific_name.as_ref());
+        self.ordinal_position.append_value(ordinal_position);
+        self.parameter_mode.append_value(parameter_mode.as_ref());
+        self.parameter_name.append_option(parameter_name.as_ref());
+        self.data_type.append_value(data_type.as_ref());
+        self.parameter_default.append_option(parameter_default);
+        self.is_variadic.append_value(is_variadic);
+        self.rid.append_value(rid);
+    }
+
+    fn finish(&mut self) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::clone(&self.schema),
+            vec![
+                Arc::new(self.specific_catalog.finish()),
+                Arc::new(self.specific_schema.finish()),
+                Arc::new(self.specific_name.finish()),
+                Arc::new(self.ordinal_position.finish()),
+                Arc::new(self.parameter_mode.finish()),
+                Arc::new(self.parameter_name.finish()),
+                Arc::new(self.data_type.finish()),
+                Arc::new(self.parameter_default.finish()),
+                Arc::new(self.is_variadic.finish()),
+                Arc::new(self.rid.finish()),
+            ],
+        )
+        .unwrap()
+    }
+}
+
+impl PartitionStream for InformationSchemaParameters {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let config = self.config.clone();
+        let mut builder = self.builder();
+        Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            futures::stream::once(async move {
+                config.make_parameters(
                     ctx.scalar_functions(),
                     ctx.aggregate_functions(),
                     ctx.window_functions(),

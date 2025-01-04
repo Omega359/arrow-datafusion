@@ -34,13 +34,14 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream, Statistics,
     },
 };
 
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use itertools::Itertools;
 use log::debug;
@@ -332,7 +333,7 @@ impl ParquetExecBuilder {
 
     /// Set the filter predicate when reading.
     ///
-    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documenation
+    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documentation
     /// for more details.
     pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         self.predicate = Some(predicate);
@@ -425,7 +426,7 @@ impl ParquetExecBuilder {
         let pruning_predicate = predicate
             .clone()
             .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                match PruningPredicate::try_new(predicate_expr, Arc::clone(file_schema)) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {e}");
@@ -439,7 +440,7 @@ impl ParquetExecBuilder {
         let page_pruning_predicate = predicate
             .as_ref()
             .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(file_schema))
             })
             .map(Arc::new);
 
@@ -610,7 +611,7 @@ impl ParquetExec {
     }
 
     /// If enabled, the reader will read the page index
-    /// This is used to optimise filter pushdown
+    /// This is used to optimize filter pushdown
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
     pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
@@ -654,13 +655,11 @@ impl ParquetExec {
         orderings: &[LexOrdering],
         file_config: &FileScanConfig,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new_with_orderings(schema, orderings),
             Self::output_partitioning_helper(file_config), // Output Partitioning
-            ExecutionMode::Bounded,                        // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -807,7 +806,7 @@ impl ExecutionPlan for ParquetExec {
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
-            table_schema: self.base_config.file_schema.clone(),
+            table_schema: Arc::clone(&self.base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
@@ -1702,7 +1701,7 @@ mod tests {
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 2)]];
@@ -1734,7 +1733,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await
             .unwrap();
 
@@ -2002,7 +2001,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != bar OR bar != c1_max@1 END"
+            "pruning_predicate=c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);

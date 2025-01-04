@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
@@ -25,12 +25,26 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Reverses the character order of a string.",
+    syntax_example = "reverse(str)",
+    sql_example = r#"```sql
+> select reverse('datafusion');
++-----------------------------+
+| reverse(Utf8("datafusion")) |
++-----------------------------+
+| noisufatad                  |
++-----------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct ReverseFunc {
     signature: Signature,
@@ -72,7 +86,11 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
@@ -83,32 +101,8 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_reverse_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_reverse_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Reverses the character order of a string.")
-            .with_syntax_example("reverse(str)")
-            .with_sql_example(
-                r#"```sql
-> select reverse('datafusion');
-+-----------------------------+
-| reverse(Utf8("datafusion")) |
-+-----------------------------+
-| noisufatad                  |
-+-----------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// Reverses the order of the characters in the string.
@@ -147,7 +141,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,
@@ -156,7 +150,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 &str,
                 LargeUtf8,
@@ -165,7 +159,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,

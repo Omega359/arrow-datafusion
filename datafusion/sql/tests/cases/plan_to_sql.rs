@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use std::vec;
-
 use arrow_schema::*;
-use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
-use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
+use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_expr::test::function_stub::{
+    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+};
+use datafusion_expr::{
+    col, lit, table_scan, wildcard, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
+use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -32,12 +35,25 @@ use datafusion_sql::unparser::dialect::{
     Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
+use sqlparser::ast::Statement;
+use std::hash::Hash;
+use std::sync::Arc;
+use std::{fmt, vec};
 
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
     table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions_nested::extract::array_element_udf;
+use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
+use datafusion_sql::unparser::ast::{
+    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
+};
+use datafusion_sql::unparser::extension_unparser::{
+    UnparseToStatementResult, UnparseWithinStatementResult,
+    UserDefinedLogicalNodeUnparser,
+};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -180,6 +196,14 @@ fn roundtrip_statement() -> Result<()> {
             SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
             FROM person
             GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
+            "SELECT ARRAY[1, 2, 3]",
+            "SELECT ARRAY[1, 2, 3][1]",
+            "SELECT [1, 2, 3]",
+            "SELECT [1, 2, 3][1]",
+            "SELECT left[1] FROM array",
+            "SELECT {a:1, b:2}",
+            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
+            "SELECT MAP {'a': 1, 'b': 2}"
     ];
 
     // For each test sql string, we transform as follows:
@@ -193,10 +217,15 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
         let state = MockSessionState::default()
+            .with_scalar_function(make_array_udf())
+            .with_scalar_function(array_element_udf())
+            .with_scalar_function(map_udf())
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -283,7 +312,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         TestStatementWithDialect {
             sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
             expected:
-                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
             parser_dialect: Box::new(MySqlDialect {}),
             unparser_dialect: Box::new(UnparserMySqlDialect {}),
         },
@@ -507,6 +536,120 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT * FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT * FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3]) as c1",
+            expected: r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3]), 1",
+            expected: r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
     ];
 
     for query in tests {
@@ -517,7 +660,8 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         let state = MockSessionState::default()
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner));
 
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -553,12 +697,38 @@ fn test_unnest_logical_plan() -> Result<()> {
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
     let expected = r#"
-Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placeholder(unnest_table.struct_col).field2, unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-  Unnest: lists[unnest_placeholder(unnest_table.array_col)|depth=1] structs[unnest_placeholder(unnest_table.struct_col)]
-    Projection: unnest_table.struct_col AS unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+  Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
+    Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
       TableScan: unnest_table"#.trim_start();
 
     assert_eq!(plan.to_string(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_aggregation_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::UInt8, false),
+    ]);
+
+    let plan = LogicalPlanBuilder::from(
+        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .aggregate(vec![col("name")], vec![sum(col("age"))])?
+    .build()?;
+
+    let unparser = Unparser::default();
+    let statement = unparser.plan_to_sql(&plan)?;
+
+    let actual = &statement.to_string();
+
+    assert_eq!(
+        actual,
+        r#"SELECT sum(users.age), users."name" FROM users GROUP BY users."name""#
+    );
 
     Ok(())
 }
@@ -882,12 +1052,25 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
     )
-    .project(vec![wildcard()])?
+    .project(vec![col("id"), col("age")])?
     .build()?;
     let query_from_table_scan_with_projection =
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_eq!(
         query_from_table_scan_with_projection.to_string(),
+        "SELECT t1.id, t1.age FROM t1"
+    );
+
+    let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
+        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .project(vec![col("id"), col("age")])?
+    .project(vec![wildcard()])?
+    .build()?;
+    let query_from_table_scan_with_two_projections =
+        plan_to_sql(&query_from_table_scan_with_two_projections)?;
+    assert_eq!(
+        query_from_table_scan_with_two_projections.to_string(),
         "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
@@ -1118,6 +1301,36 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     assert_eq!(sql.to_string(), expected_sql);
 
+    let right_plan_with_filter_schema = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![
+            col("right_table.age").gt(lit(10)),
+            col("right_table.age").lt(lit(11)),
+        ],
+    )?
+    .build()?;
+    let right_plan_with_duplicated_filter =
+        LogicalPlanBuilder::from(right_plan_with_filter_schema.clone())
+            .filter(col("right_table.age").gt(lit(10)))?
+            .build()?;
+
+    let join_plan_duplicated_filter = LogicalPlanBuilder::from(left_plan)
+        .join(
+            right_plan_with_duplicated_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_duplicated_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table.age > 10)) AND (right_table.age < 11)))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
     Ok(())
 }
 
@@ -1211,6 +1424,194 @@ fn test_unnest_to_sql() {
     sql_round_trip(
         GenericDialect {},
         r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
-        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
+        r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
     );
+}
+
+#[test]
+fn test_join_with_no_conditions() {
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct MockUserDefinedLogicalPlan {
+    input: LogicalPlan,
+}
+
+impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
+    fn name(&self) -> &str {
+        "MockUserDefinedLogicalPlan"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MockUserDefinedLogicalPlan")
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        Ok(MockUserDefinedLogicalPlan {
+            input: inputs.into_iter().next().unwrap(),
+        })
+    }
+}
+
+struct MockStatementUnparser {}
+
+impl UserDefinedLogicalNodeUnparser for MockStatementUnparser {
+    fn unparse_to_statement(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        unparser: &Unparser,
+    ) -> Result<UnparseToStatementResult> {
+        if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
+            let input = unparser.plan_to_sql(&plan.input)?;
+            Ok(UnparseToStatementResult::Modified(input))
+        } else {
+            Ok(UnparseToStatementResult::Unmodified)
+        }
+    }
+}
+
+struct UnusedUnparser {}
+
+impl UserDefinedLogicalNodeUnparser for UnusedUnparser {
+    fn unparse(
+        &self,
+        _node: &dyn UserDefinedLogicalNode,
+        _unparser: &Unparser,
+        _query: &mut Option<&mut QueryBuilder>,
+        _select: &mut Option<&mut SelectBuilder>,
+        _relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<UnparseWithinStatementResult> {
+        panic!("This should not be called");
+    }
+
+    fn unparse_to_statement(
+        &self,
+        _node: &dyn UserDefinedLogicalNode,
+        _unparser: &Unparser,
+    ) -> Result<UnparseToStatementResult> {
+        panic!("This should not be called");
+    }
+}
+
+#[test]
+fn test_unparse_extension_to_statement() -> Result<()> {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql("SELECT * FROM j1")?
+        .parse_statement()?;
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+    let extension = MockUserDefinedLogicalPlan { input: plan };
+    let extension = LogicalPlan::Extension(Extension {
+        node: Arc::new(extension),
+    });
+    let unparser = Unparser::default().with_extension_unparsers(vec![
+        Arc::new(MockStatementUnparser {}),
+        Arc::new(UnusedUnparser {}),
+    ]);
+    let sql = unparser.plan_to_sql(&extension)?;
+    let expected = "SELECT * FROM j1";
+    assert_eq!(sql.to_string(), expected);
+
+    if let Some(err) = plan_to_sql(&extension).err() {
+        assert_contains!(
+            err.to_string(),
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan");
+    } else {
+        panic!("Expected error");
+    }
+    Ok(())
+}
+
+struct MockSqlUnparser {}
+
+impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
+    fn unparse(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        unparser: &Unparser,
+        _query: &mut Option<&mut QueryBuilder>,
+        _select: &mut Option<&mut SelectBuilder>,
+        relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<UnparseWithinStatementResult> {
+        if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
+            let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
+                return Ok(UnparseWithinStatementResult::Unmodified);
+            };
+            let mut derived_builder = DerivedRelationBuilder::default();
+            derived_builder.subquery(input);
+            derived_builder.lateral(false);
+            if let Some(rel) = relation {
+                rel.derived(derived_builder);
+            }
+        }
+        Ok(UnparseWithinStatementResult::Modified)
+    }
+}
+
+#[test]
+fn test_unparse_extension_to_sql() -> Result<()> {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql("SELECT * FROM j1")?
+        .parse_statement()?;
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+    let extension = MockUserDefinedLogicalPlan { input: plan };
+    let extension = LogicalPlan::Extension(Extension {
+        node: Arc::new(extension),
+    });
+
+    let plan = LogicalPlanBuilder::from(extension)
+        .project(vec![col("j1_id").alias("user_id")])?
+        .build()?;
+    let unparser = Unparser::default().with_extension_unparsers(vec![
+        Arc::new(MockSqlUnparser {}),
+        Arc::new(UnusedUnparser {}),
+    ]);
+    let sql = unparser.plan_to_sql(&plan)?;
+    let expected = "SELECT j1.j1_id AS user_id FROM (SELECT * FROM j1)";
+    assert_eq!(sql.to_string(), expected);
+
+    if let Some(err) = plan_to_sql(&plan).err() {
+        assert_contains!(
+            err.to_string(),
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan"
+        );
+    } else {
+        panic!("Expected error")
+    }
+    Ok(())
 }

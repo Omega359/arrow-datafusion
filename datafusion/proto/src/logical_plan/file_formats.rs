@@ -67,6 +67,7 @@ impl CsvOptionsProto {
                     .unwrap_or_default(),
                 time_format: options.time_format.clone().unwrap_or_default(),
                 null_value: options.null_value.clone().unwrap_or_default(),
+                null_regex: options.null_regex.clone().unwrap_or_default(),
                 comment: options.comment.map_or(vec![], |v| vec![v]),
                 newlines_in_values: options
                     .newlines_in_values
@@ -140,6 +141,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 None
             } else {
                 Some(proto.null_value.clone())
+            },
+            null_regex: if proto.null_regex.is_empty() {
+                None
+            } else {
+                Some(proto.null_regex.clone())
             },
             comment: if !proto.comment.is_empty() {
                 Some(proto.comment[0])
@@ -404,6 +410,7 @@ impl TableParquetOptionsProto {
                 maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
+                skip_arrow_metadata: global_options.global.skip_arrow_metadata,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -495,6 +502,7 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             maximum_buffered_record_batches_per_stream: proto.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
+            skip_arrow_metadata: proto.skip_arrow_metadata,
         }
     }
 }

@@ -75,6 +75,7 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
+sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPCH dataset
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
@@ -175,6 +176,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                sort_tpch)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -251,6 +256,9 @@ main() {
                     ;;
                 external_aggr)
                     run_external_aggr
+                    ;;
+                sort_tpch)
+                    run_sort_tpch
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -448,11 +456,11 @@ run_clickbench_extended() {
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
-# http://homepages.cwi.nl/~boncz/job/imdb.tgz
+# https://event.cwi.nl/da/job/imdb.tgz
 data_imdb() {
     local imdb_dir="${DATA_DIR}/imdb"
     local imdb_temp_gz="${imdb_dir}/imdb.tgz"
-    local imdb_url="https://homepages.cwi.nl/~boncz/job/imdb.tgz"
+    local imdb_url="https://event.cwi.nl/da/job/imdb.tgz"
 
    # imdb has 21 files, we just separate them into 3 groups for better readability 
     local first_required_files=(
@@ -547,6 +555,16 @@ run_external_aggr() {
     # CPU cores, we set a constant number of partitions to prevent this 
     # benchmark to fail on some machines.
     $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+}
+
+# Runs the sort integration benchmark
+run_sort_tpch() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/sort_tpch.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sort tpch benchmark..."
+
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
 }
 
 

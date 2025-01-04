@@ -19,16 +19,16 @@
 //! and producing batches in parallel for the right partitions
 
 use super::utils::{
-    adjust_right_output_partitioning, BatchSplitter, BatchTransformer,
-    BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
+    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, ColumnStatistics, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use arrow::compute::concat_batches;
@@ -53,8 +53,7 @@ struct JoinLeftData {
     merged_batch: RecordBatch,
     /// Track memory reservation for merged_batch. Relies on drop
     /// semantics to release reservation when JoinLeftData is dropped.
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 #[allow(rustdoc::private_intra_doc_links)]
@@ -162,14 +161,25 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        // Determine the execution mode:
-        let mut mode = execution_mode_from_children([left, right]);
-        if mode.is_unbounded() {
-            // If any of the inputs is unbounded, cross join breaks the pipeline.
-            mode = ExecutionMode::PipelineBreaking;
-        }
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
+    }
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+    /// Returns a new `ExecutionPlan` that computes the same join as this one,
+    /// with the left and right inputs swapped using the  specified
+    /// `partition_mode`.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_join =
+            CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
+        reorder_output_after_swap(
+            Arc::new(new_join),
+            &self.left.schema(),
+            &self.right.schema(),
+        )
     }
 }
 
@@ -191,25 +201,28 @@ async fn load_left_input(
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
-        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
-            let batch_size = batch.get_array_memory_size();
-            // Reserve memory for incoming batch
-            acc.2.try_grow(batch_size)?;
-            // Update metrics
-            acc.1.build_mem_used.add(batch_size);
-            acc.1.build_input_batches.add(1);
-            acc.1.build_input_rows.add(batch.num_rows());
-            // Push batch to output
-            acc.0.push(batch);
-            Ok(acc)
-        })
+        .try_fold(
+            (Vec::new(), metrics, reservation),
+            |(mut batches, metrics, mut reservation), batch| async {
+                let batch_size = batch.get_array_memory_size();
+                // Reserve memory for incoming batch
+                reservation.try_grow(batch_size)?;
+                // Update metrics
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                // Push batch to output
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
+            },
+        )
         .await?;
 
     let merged_batch = concat_batches(&left_schema, &batches)?;
 
     Ok(JoinLeftData {
         merged_batch,
-        reservation,
+        _reservation: reservation,
     })
 }
 

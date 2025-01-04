@@ -21,9 +21,12 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
+use super::invariants::{
+    assert_always_invariants, assert_executable_invariants, InvariantLevel,
+};
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -45,7 +48,10 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
@@ -284,6 +290,22 @@ impl Default for LogicalPlan {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         })
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Self> for LogicalPlan {
+    fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(self)
+    }
+
+    fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        f(self)
     }
 }
 
@@ -1108,6 +1130,14 @@ impl LogicalPlan {
         }
     }
 
+    /// checks that the plan conforms to the listed invariant level, returning an Error if not
+    pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        match check {
+            InvariantLevel::Always => assert_always_invariants(self),
+            InvariantLevel::Executable => assert_executable_invariants(self),
+        }
+    }
+
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
@@ -1183,7 +1213,7 @@ impl LogicalPlan {
     /// # let schema = Schema::new(vec![
     /// #     Field::new("id", DataType::Int32, false),
     /// # ]);
-    /// // Build SELECT * FROM t1 WHRERE id = $1
+    /// // Build SELECT * FROM t1 WHERE id = $1
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
     ///     .build().unwrap();
@@ -1206,7 +1236,7 @@ impl LogicalPlan {
     ///  );
     ///
     /// // Note you can also used named parameters
-    /// // Build SELECT * FROM t1 WHRERE id = $my_param
+    /// // Build SELECT * FROM t1 WHERE id = $my_param
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$my_param"))).unwrap()
     ///     .build().unwrap()
@@ -1518,7 +1548,7 @@ impl LogicalPlan {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
@@ -1561,7 +1591,7 @@ impl LogicalPlan {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
@@ -1581,7 +1611,7 @@ impl LogicalPlan {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = PgJsonVisitor::new(f);
                 visitor.with_schema(true);
@@ -1627,7 +1657,7 @@ impl LogicalPlan {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = GraphvizVisitor::new(f);
 
@@ -1678,7 +1708,7 @@ impl LogicalPlan {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
@@ -3049,12 +3079,12 @@ impl Aggregate {
 
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
-        static INTERNAL_ID_EXPR: OnceLock<Expr> = OnceLock::new();
+        static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
+            Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
+        });
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         if self.is_grouping_set() {
-            exprs.push(INTERNAL_ID_EXPR.get_or_init(|| {
-                Expr::Column(Column::from_name(Self::INTERNAL_GROUPING_ID))
-            }));
+            exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
@@ -3336,6 +3366,25 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
 }
 
+impl Normalizeable for Subquery {
+    fn can_normalize(&self) -> bool {
+        false
+    }
+}
+
+impl NormalizeEq for Subquery {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        // TODO: may be implement NormalizeEq for LogicalPlan?
+        *self.subquery == *other.subquery
+            && self.outer_ref_columns.len() == other.outer_ref_columns.len()
+            && self
+                .outer_ref_columns
+                .iter()
+                .zip(other.outer_ref_columns.iter())
+                .all(|(a, b)| a.normalize_eq(b))
+    }
+}
+
 impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
@@ -3476,9 +3525,13 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{
+        col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
+    };
 
-    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
+    use datafusion_common::tree_node::{
+        TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
+    };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -3591,7 +3644,7 @@ digraph {
 "#;
 
         // just test for a few key lines in the output rather than the
-        // whole thing to make test mainteance easier.
+        // whole thing to make test maintenance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
         assert_eq!(expected_graphviz, graphviz);
@@ -4138,5 +4191,143 @@ digraph {
             )
             .unwrap();
         assert_eq!(limit, new_limit);
+    }
+
+    #[test]
+    fn test_with_subqueries_jump() {
+        // The test plan contains a `Project` node above a `Filter` node, and the
+        // `Project` node contains a subquery plan with a `Filter` root node, so returning
+        // `TreeNodeRecursion::Jump` on `Project` should cause not visiting any of the
+        // `Filter`s.
+        let subquery_schema =
+            Schema::new(vec![Field::new("sub_id", DataType::Int32, false)]);
+
+        let subquery_plan =
+            table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
+                .unwrap()
+                .filter(col("sub_id").eq(lit(0)))
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
+            .unwrap()
+            .filter(col("id").eq(lit(0)))
+            .unwrap()
+            .project(vec![col("id"), scalar_subquery(Arc::new(subquery_plan))])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let mut filter_found = false;
+        plan.apply_with_subqueries(|plan| {
+            match plan {
+                LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                LogicalPlan::Filter(..) => filter_found = true,
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpVisitor {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpVisitor {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl<'n> TreeNodeVisitor<'n> for ProjectJumpVisitor {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+                match node {
+                    LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(TreeNodeRecursion::Continue)
+            }
+        }
+
+        let mut visitor = ProjectJumpVisitor::new();
+        plan.visit_with_subqueries(&mut visitor).unwrap();
+        assert!(!visitor.filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_with_subqueries(|plan| {
+                match plan {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(plan))
+            })
+            .unwrap();
+        assert!(!filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_up_with_subqueries(
+                |plan| {
+                    match plan {
+                        LogicalPlan::Projection(..) => {
+                            return Ok(Transformed::new(
+                                plan,
+                                false,
+                                TreeNodeRecursion::Jump,
+                            ))
+                        }
+                        LogicalPlan::Filter(..) => filter_found = true,
+                        _ => {}
+                    }
+                    Ok(Transformed::no(plan))
+                },
+                |plan| Ok(Transformed::no(plan)),
+            )
+            .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpRewriter {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpRewriter {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl TreeNodeRewriter for ProjectJumpRewriter {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                match node {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(node))
+            }
+        }
+
+        let mut rewriter = ProjectJumpRewriter::new();
+        plan.rewrite_with_subqueries(&mut rewriter).unwrap();
+        assert!(!rewriter.filter_found);
     }
 }
