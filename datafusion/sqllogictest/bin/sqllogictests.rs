@@ -42,6 +42,7 @@ use crate::postgres_container::{
 };
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
@@ -119,6 +120,7 @@ async fn run_tests() -> Result<()> {
     .progress_chars("##-");
 
     let start = Instant::now();
+    let count = AtomicI32::new(0);
 
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
@@ -129,6 +131,8 @@ async fn run_tests() -> Result<()> {
             } else {
                 df_value_validator
             };
+
+            count.fetch_add(1, Ordering::Relaxed);
 
             let m_clone = m.clone();
             let m_style_clone = m_style.clone();
@@ -184,7 +188,7 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
+    m.println(format!("Completed {} files in {}", count.load(Ordering::Relaxed), HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
