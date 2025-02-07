@@ -223,7 +223,7 @@ pub fn logical_plan_to_json_with_extension_codec(
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<String> {
     let protobuf =
-        protobuf::LogicalPlanNode::try_from_logical_plan(plan, &extension_codec)
+        protobuf::LogicalPlanNode::try_from_logical_plan(plan, extension_codec)
             .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     serde_json::to_string(&protobuf)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))
@@ -265,7 +265,7 @@ pub fn logical_plan_from_json_with_extension_codec(
 ) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error deserializing plan: {e}"))?;
-    back.try_into_logical_plan(ctx, &extension_codec)
+    back.try_into_logical_plan(ctx, extension_codec)
 }
 
 /// Serialize a PhysicalPlan as bytes
