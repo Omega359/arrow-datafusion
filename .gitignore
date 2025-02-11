@@ -71,3 +71,5 @@ datafusion/core/benches/data/*
 # rat
 filtered_rat.txt
 rat.txt
+
+test.text
