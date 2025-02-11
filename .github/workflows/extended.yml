@@ -71,7 +71,7 @@ jobs:
         with:
           # Check out the pull request if triggered by a comment
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          repository: ${{ github.event_name == 'issue_comment' && github.event.pull_request.head.repo.full_name || github.repository }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -98,7 +98,7 @@ jobs:
         with:
           # Check out the pull request if triggered by a comment
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          repository: ${{ github.event_name == 'issue_comment' && github.event.pull_request.head.repo.full_name || github.repository}}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -126,7 +126,7 @@ jobs:
         with:
           # Check out the pull request if triggered by a comment
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          repository: ${{ github.event_name == 'issue_comment' && github.event.pull_request.head.repo.full_name || github.repository }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -152,7 +152,7 @@ jobs:
         with:
           # Check out the pull request if triggered by a comment
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          repository: ${{ github.event_name == 'issue_comment' && github.event.pull_request.head.repo.full_name || github.repository }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
