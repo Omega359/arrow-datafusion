@@ -216,7 +216,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
     Ok(buffer.into())
 }
 
-/// Serialize a LogicalPlan as JSON
+/// Serialize a LogicalPlan as JSON using the provided extension codec
 #[cfg(feature = "json")]
 pub fn logical_plan_to_json_with_extension_codec(
     plan: &LogicalPlan,
@@ -229,6 +229,13 @@ pub fn logical_plan_to_json_with_extension_codec(
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))
 }
 
+/// Deserialize a LogicalPlan from JSON
+#[cfg(feature = "json")]
+pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
+    let extension_codec = DefaultLogicalExtensionCodec {};
+    logical_plan_from_json_with_extension_codec(json, ctx, &extension_codec)
+}
+
 /// Deserialize a LogicalPlan from bytes
 pub fn logical_plan_from_bytes(
     bytes: &[u8],
@@ -236,13 +243,6 @@ pub fn logical_plan_from_bytes(
 ) -> Result<LogicalPlan> {
     let extension_codec = DefaultLogicalExtensionCodec {};
     logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
-}
-
-/// Deserialize a LogicalPlan from JSON
-#[cfg(feature = "json")]
-pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
-    let extension_codec = DefaultLogicalExtensionCodec {};
-    logical_plan_from_json_with_extension_codec(json, ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
@@ -306,7 +306,7 @@ pub fn physical_plan_from_json(
     ctx: &SessionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
-        .map_err(|e| plan_datafusion_err!("Error deserializing plan: {e}"))?;
+        .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
     back.try_into_physical_plan(ctx, &ctx.runtime_env(), &extension_codec)
 }
