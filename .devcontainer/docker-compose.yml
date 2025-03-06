@@ -27,14 +27,14 @@ services:
       # created in the container. On Windows, files are copied
       # from /mnt/ssh to ~/.ssh to fix permissions.
       - type: bind
-       source: "~/.ssh"
-       target: /mnt/ssh
+        source: "~/.ssh"
+        target: /mnt/ssh
       # Shell history persistence
       #- ~/.zsh_history:/root/.zsh_history
       # Git config
       - type: bind
-       source: "~/.gitconfig"
-       target: /root/.gitconfig
+        source: "~/.gitconfig"
+        target: /root/.gitconfig
     environment:
       - TZ=
     # Needed for debugging
