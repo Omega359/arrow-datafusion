@@ -38,8 +38,8 @@ services:
     environment:
       - TZ=
     # Needed for debugging
-    # cap_add:
-    #   - SYS_PTRACE
-    # security_opt:
-    #   - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     entrypoint: [ "zsh", "-c", "while sleep 1000; do :; done" ]
