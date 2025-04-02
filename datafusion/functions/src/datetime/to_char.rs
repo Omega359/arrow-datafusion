@@ -19,7 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
-use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
+use arrow::array::{new_null_array, Array, ArrayRef, GenericStringArray, StringArray};
+use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
@@ -27,7 +28,7 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-
+use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -145,14 +146,14 @@ impl ScalarUDFImpl for ToCharFunc {
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
-                _to_char_scalar(date_time.clone(), None)
+                to_char_scalar(date_time.clone(), None)
             }
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                _to_char_scalar(date_time.clone(), Some(format))
+                to_char_scalar(date_time.clone(), Some(format))
             }
-            ColumnarValue::Array(_) => _to_char_array(&args),
+            ColumnarValue::Array(_) => to_char_array(&args),
             _ => {
                 exec_err!(
                     "Format for `to_char` must be non-null Utf8, received {:?}",
@@ -170,7 +171,7 @@ impl ScalarUDFImpl for ToCharFunc {
     }
 }
 
-fn _build_format_options<'a>(
+fn build_format_options<'a>(
     data_type: &DataType,
     format: Option<&'a str>,
 ) -> Result<FormatOptions<'a>, Result<ColumnarValue>> {
@@ -202,15 +203,15 @@ fn _build_format_options<'a>(
 }
 
 /// Special version when arg\[1] is a scalar
-fn _to_char_scalar(
+fn to_char_scalar(
     expression: ColumnarValue,
     format: Option<&str>,
 ) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
-    let data_type = &expression.data_type();
+    let mut data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let array = expression.into_array(1)?;
+    let mut array = expression.into_array(1)?;
 
     if format.is_none() {
         if is_scalar_expression {
@@ -220,7 +221,12 @@ fn _to_char_scalar(
         }
     }
 
-    let format_options = match _build_format_options(data_type, format) {
+    if data_type == &Date32 && has_time_specifier(format.unwrap()) {
+        data_type = &Date64;
+        array = cast(array.as_ref(), data_type)?;
+    }
+
+    let format_options = match build_format_options(data_type, format) {
         Ok(value) => value,
         Err(value) => return value,
     };
@@ -251,13 +257,21 @@ fn _to_char_scalar(
     }
 }
 
-fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays = ColumnarValue::values_to_arrays(args)?;
-    let mut results: Vec<Option<String>> = vec![];
-    let format_array = arrays[1].as_string::<i32>();
-    let data_type = arrays[0].data_type();
+fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let mut arrays = ColumnarValue::values_to_arrays(args)?;
+    let (data, right) = arrays.split_at_mut(1);
+    let format_array = right[0].as_string::<i32>();
+    let mut data_type = data[0].data_type();
 
-    for idx in 0..arrays[0].len() {
+    if data_type == &Date32 && has_any_time_specifiers(format_array) {
+        data_type = &Date64;
+        data[0] = cast(data[0].as_ref(), data_type)?;
+    }
+
+    let data = &data[0];
+    let mut results: Vec<Option<String>> = vec![];
+
+    for idx in 0..data.len() {
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -267,13 +281,13 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             results.push(None);
             continue;
         }
-        let format_options = match _build_format_options(data_type, format) {
+        let format_options = match build_format_options(data_type, format) {
             Ok(value) => value,
             Err(value) => return value,
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
-        // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
+        // of ArrayFormatter
+        let formatter = ArrayFormatter::try_new(data.as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
@@ -292,6 +306,58 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
         },
     }
+}
+
+fn has_time_specifier(format: &str) -> bool {
+    let items = StrftimeItems::new(format);
+    for item in items {
+        match item {
+            Item::Fixed(v) => match v {
+                Fixed::LowerAmPm => return true,
+                Fixed::UpperAmPm => return true,
+                Fixed::RFC2822 => return true,
+                Fixed::RFC3339 => return true,
+                Fixed::Nanosecond => return true,
+                Fixed::Nanosecond3 => return true,
+                Fixed::Nanosecond6 => return true,
+                Fixed::Nanosecond9 => return true,
+                Fixed::TimezoneName => return true,
+                Fixed::TimezoneOffset => return true,
+                Fixed::TimezoneOffsetZ => return true,
+                Fixed::TimezoneOffsetColon => return true,
+                Fixed::TimezoneOffsetColonZ => return true,
+                Fixed::TimezoneOffsetDoubleColon => return true,
+                Fixed::TimezoneOffsetTripleColon => return true,
+                _ => (),
+            },
+            Item::Numeric(v, _pad) => match v {
+                Numeric::Hour => return true,
+                Numeric::Hour12 => return true,
+                Numeric::Minute => return true,
+                Numeric::Second => return true,
+                Numeric::Nanosecond => return true,
+                Numeric::Timestamp => return true,
+                _ => (),
+            },
+            _ => (),
+        }
+    }
+
+    false
+}
+
+fn has_any_time_specifiers(format_array: &GenericStringArray<i32>) -> bool {
+    for idx in 0..format_array.len() {
+        if format_array.is_null(idx) {
+            continue;
+        }
+
+        if has_time_specifier(format_array.value(idx)) {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -327,6 +393,11 @@ mod tests {
                 ScalarValue::Date32(Some(18506)),
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date32(Some(18506)),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
+                "2020::09::01 00::00::00 000000000".to_string(),
             ),
             (
                 ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
@@ -406,6 +477,11 @@ mod tests {
                 ScalarValue::Date32(Some(18506)),
                 StringArray::from(vec!["%Y::%m::%d".to_string()]),
                 "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date32(Some(18506)),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
+                "2020::09::01 00::00::00 000000000".to_string(),
             ),
             (
                 ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
@@ -491,6 +567,14 @@ mod tests {
                 StringArray::from(vec!["2020::09::01", "2020::09::02"]),
             ),
             (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
+                StringArray::from(vec![
+                    "2020::09::01 00::00::00 000000000",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
+            ),
+            (
                 Arc::new(Date64Array::from(vec![
                     date.and_utc().timestamp_millis(),
                     date2.and_utc().timestamp_millis(),
@@ -505,6 +589,25 @@ mod tests {
                 Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
                 StringArray::from(vec!["2020::09::01", "02::09::2020"]),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec![
+                    "%Y::%m::%d %S::%M::%H %f",
+                    "%Y::%m::%d %S::%M::%H %f",
+                ]),
+                StringArray::from(vec![
+                    "2020::09::01 00::00::00 000000000",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
+                StringArray::from(vec![
+                    "2020::09::01",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
             ),
             (
                 Arc::new(Date64Array::from(vec![
