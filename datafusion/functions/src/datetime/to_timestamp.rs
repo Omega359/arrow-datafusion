@@ -395,10 +395,10 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Decimal128(_, _) => {
                 match &args[0] {
                     ColumnarValue::Scalar(ScalarValue::Decimal128(
-                                              Some(value),
-                                              _,
-                                              scale,
-                                          )) => {
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
                         // Convert decimal to seconds and nanoseconds
                         let scale_factor = 10_i128.pow(*scale as u32);
                         let seconds = value / scale_factor;
@@ -464,11 +464,13 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => match self.safe {
-                true => args[0]
-                    .cast_to(&Timestamp(Second, None), Some(&CastOptions::default())),
-                false => args[0].cast_to(&Timestamp(Second, None), None),
-            },
+            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => {
+                match self.safe {
+                    true => args[0]
+                        .cast_to(&Timestamp(Second, None), Some(&CastOptions::default())),
+                    false => args[0].cast_to(&Timestamp(Second, None), None),
+                }
+            }
             Timestamp(_, Some(tz)) => match self.safe {
                 true => args[0]
                     .cast_to(&Timestamp(Second, Some(tz)), Some(&CastOptions::default())),
