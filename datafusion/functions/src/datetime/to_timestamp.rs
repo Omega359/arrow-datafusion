@@ -415,7 +415,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                     }
                     _ => exec_err!("Invalid decimal value"),
                 }
-            },
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp",
