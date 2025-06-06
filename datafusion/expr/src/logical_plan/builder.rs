@@ -501,6 +501,21 @@ impl LogicalPlanBuilder {
         if table_scan.filters.is_empty() {
             if let Some(p) = table_scan.source.get_logical_plan() {
                 let sub_plan = p.into_owned();
+
+                if let Some(proj) = table_scan.projection {
+                    let projection_exprs = proj
+                        .into_iter()
+                        .map(|i| {
+                            Expr::Column(Column::from(
+                                sub_plan.schema().qualified_field(i),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    return Self::new(sub_plan)
+                        .project(projection_exprs)?
+                        .alias(table_scan.table_name);
+                }
+
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
@@ -586,7 +601,7 @@ impl LogicalPlanBuilder {
     /// Apply a filter which is used for a having clause
     pub fn having(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Filter::try_new_with_having(expr, self.plan)
+        Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
             .map(Self::from)
     }
@@ -1122,12 +1137,24 @@ impl LogicalPlanBuilder {
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(l)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        l,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
             } else if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(r)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        r,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
             } else {
@@ -1486,7 +1513,7 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
             // Loop until we find a name that hasn't been used
             while seen.contains(&new_name) {
                 *count += 1;
-                new_name = format!("{}:{}", base_name, count);
+                new_name = format!("{base_name}:{count}");
             }
 
             seen.insert(new_name.clone());
@@ -1599,12 +1626,19 @@ pub fn build_join_schema(
         join_type,
         left.fields().len(),
     );
-    let metadata = left
+
+    let (schema1, schema2) = match join_type {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        _ => (right, left),
+    };
+
+    let metadata = schema1
         .metadata()
         .clone()
         .into_iter()
-        .chain(right.metadata().clone())
+        .chain(schema2.metadata().clone())
         .collect();
+
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
@@ -2233,6 +2267,7 @@ mod tests {
 
     use crate::test::function_stub::sum;
     use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
+    use insta::assert_snapshot;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2242,11 +2277,11 @@ mod tests {
                 .project(vec![col("id")])?
                 .build()?;
 
-        let expected = "Projection: employee_csv.id\
-        \n  Filter: employee_csv.state = Utf8(\"CO\")\
-        \n    TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r#"
+        Projection: employee_csv.id
+          Filter: employee_csv.state = Utf8("CO")
+            TableScan: employee_csv projection=[id, state]
+        "#);
 
         Ok(())
     }
@@ -2258,12 +2293,7 @@ mod tests {
         let plan =
             LogicalPlanBuilder::scan("employee_csv", table_source(&schema), projection)
                 .unwrap();
-        let expected = DFSchema::try_from_qualified_schema(
-            TableReference::bare("employee_csv"),
-            &schema,
-        )
-        .unwrap();
-        assert_eq!(&expected, plan.schema().as_ref());
+        assert_snapshot!(plan.schema().as_ref(), @"fields:[employee_csv.id, employee_csv.first_name, employee_csv.last_name, employee_csv.state, employee_csv.salary], metadata:{}");
 
         // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifier
         // (and thus normalized to "employee"csv") as well
@@ -2271,7 +2301,7 @@ mod tests {
         let plan =
             LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection)
                 .unwrap();
-        assert_eq!(&expected, plan.schema().as_ref());
+        assert_snapshot!(plan.schema().as_ref(), @"fields:[employee_csv.id, employee_csv.first_name, employee_csv.last_name, employee_csv.state, employee_csv.salary], metadata:{}");
     }
 
     #[test]
@@ -2280,9 +2310,9 @@ mod tests {
         let projection = None;
         let err =
             LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
-        assert_eq!(
+        assert_snapshot!(
             err.strip_backtrace(),
-            "Error during planning: table_name cannot be empty"
+            @"Error during planning: table_name cannot be empty"
         );
     }
 
@@ -2296,10 +2326,10 @@ mod tests {
                 ])?
                 .build()?;
 
-        let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
-        \n  TableScan: employee_csv projection=[state, salary]";
-
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST
+          TableScan: employee_csv projection=[state, salary]
+        ");
 
         Ok(())
     }
@@ -2316,15 +2346,15 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        let expected = "Union\
-        \n  Union\
-        \n    Union\
-        \n      TableScan: employee_csv projection=[state, salary]\
-        \n      TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]";
-
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Union
+          Union
+            Union
+              TableScan: employee_csv projection=[state, salary]
+              TableScan: employee_csv projection=[state, salary]
+            TableScan: employee_csv projection=[state, salary]
+          TableScan: employee_csv projection=[state, salary]
+        ");
 
         Ok(())
     }
@@ -2341,19 +2371,18 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        let expected = "\
-        Distinct:\
-        \n  Union\
-        \n    Distinct:\
-        \n      Union\
-        \n        Distinct:\
-        \n          Union\
-        \n            TableScan: employee_csv projection=[state, salary]\
-        \n            TableScan: employee_csv projection=[state, salary]\
-        \n        TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]";
-
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Distinct:
+          Union
+            Distinct:
+              Union
+                Distinct:
+                  Union
+                    TableScan: employee_csv projection=[state, salary]
+                    TableScan: employee_csv projection=[state, salary]
+                TableScan: employee_csv projection=[state, salary]
+            TableScan: employee_csv projection=[state, salary]
+        ");
 
         Ok(())
     }
@@ -2367,13 +2396,12 @@ mod tests {
                 .distinct()?
                 .build()?;
 
-        let expected = "\
-        Distinct:\
-        \n  Projection: employee_csv.id\
-        \n    Filter: employee_csv.state = Utf8(\"CO\")\
-        \n      TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r#"
+        Distinct:
+          Projection: employee_csv.id
+            Filter: employee_csv.state = Utf8("CO")
+              TableScan: employee_csv projection=[id, state]
+        "#);
 
         Ok(())
     }
@@ -2393,14 +2421,15 @@ mod tests {
             .filter(exists(Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: EXISTS (<subquery>)\
-        \n  Subquery:\
-        \n    Filter: foo.a = bar.a\
-        \n      Projection: foo.a\
-        \n        TableScan: foo\
-        \n  Projection: bar.a\
-        \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query}"));
+        assert_snapshot!(outer_query, @r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Filter: foo.a = bar.a
+              Projection: foo.a
+                TableScan: foo
+          Projection: bar.a
+            TableScan: bar
+        ");
 
         Ok(())
     }
@@ -2421,14 +2450,15 @@ mod tests {
             .filter(in_subquery(col("a"), Arc::new(subquery)))?
             .build()?;
 
-        let expected = "Filter: bar.a IN (<subquery>)\
-        \n  Subquery:\
-        \n    Filter: foo.a = bar.a\
-        \n      Projection: foo.a\
-        \n        TableScan: foo\
-        \n  Projection: bar.a\
-        \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query}"));
+        assert_snapshot!(outer_query, @r"
+        Filter: bar.a IN (<subquery>)
+          Subquery:
+            Filter: foo.a = bar.a
+              Projection: foo.a
+                TableScan: foo
+          Projection: bar.a
+            TableScan: bar
+        ");
 
         Ok(())
     }
@@ -2448,13 +2478,14 @@ mod tests {
             .project(vec![scalar_subquery(Arc::new(subquery))])?
             .build()?;
 
-        let expected = "Projection: (<subquery>)\
-        \n  Subquery:\
-        \n    Filter: foo.a = bar.a\
-        \n      Projection: foo.b\
-        \n        TableScan: foo\
-        \n  TableScan: bar";
-        assert_eq!(expected, format!("{outer_query}"));
+        assert_snapshot!(outer_query, @r"
+        Projection: (<subquery>)
+          Subquery:
+            Filter: foo.a = bar.a
+              Projection: foo.b
+                TableScan: foo
+          TableScan: bar
+        ");
 
         Ok(())
     }
@@ -2548,13 +2579,11 @@ mod tests {
         let plan2 =
             table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
 
-        let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
-         Left is 1 and right is 2.";
         let err_msg1 =
             LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
                 .unwrap_err();
 
-        assert_eq!(err_msg1.strip_backtrace(), expected);
+        assert_snapshot!(err_msg1.strip_backtrace(), @"Error during planning: INTERSECT/EXCEPT query must have the same number of columns. Left is 1 and right is 2.");
 
         Ok(())
     }
@@ -2565,19 +2594,29 @@ mod tests {
         let err = nested_table_scan("test_table")?
             .unnest_column("scalar")
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .starts_with("Internal error: trying to unnest on invalid data type UInt32"));
+
+        let DataFusionError::Internal(desc) = err else {
+            return plan_err!("Plan should have returned an DataFusionError::Internal");
+        };
+
+        let desc = desc
+            .split(DataFusionError::BACK_TRACE_SEP)
+            .collect::<Vec<&str>>()
+            .first()
+            .unwrap_or(&"")
+            .to_string();
+
+        assert_snapshot!(desc, @"trying to unnest on invalid data type UInt32");
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
             .unnest_column("strings")?
             .build()?;
 
-        let expected = "\
-        Unnest: lists[test_table.strings|depth=1] structs[]\
-        \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Unnest: lists[test_table.strings|depth=1] structs[]
+          TableScan: test_table
+        ");
 
         // Check unnested field is a scalar
         let field = plan.schema().field_with_name(None, "strings").unwrap();
@@ -2588,16 +2627,16 @@ mod tests {
             .unnest_column("struct_singular")?
             .build()?;
 
-        let expected = "\
-        Unnest: lists[] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Unnest: lists[] structs[test_table.struct_singular]
+          TableScan: test_table
+        ");
 
         for field_name in &["a", "b"] {
             // Check unnested struct field is a scalar
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }
@@ -2609,12 +2648,12 @@ mod tests {
             .unnest_column("struct_singular")?
             .build()?;
 
-        let expected = "\
-        Unnest: lists[] structs[test_table.struct_singular]\
-        \n  Unnest: lists[test_table.structs|depth=1] structs[]\
-        \n    Unnest: lists[test_table.strings|depth=1] structs[]\
-        \n      TableScan: test_table";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Unnest: lists[] structs[test_table.struct_singular]
+          Unnest: lists[test_table.structs|depth=1] structs[]
+            Unnest: lists[test_table.strings|depth=1] structs[]
+              TableScan: test_table
+        ");
 
         // Check unnested struct list field should be a struct.
         let field = plan.schema().field_with_name(None, "structs").unwrap();
@@ -2630,10 +2669,10 @@ mod tests {
             .unnest_columns_with_options(cols, UnnestOptions::default())?
             .build()?;
 
-        let expected = "\
-        Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]
+          TableScan: test_table
+        ");
 
         // Unnesting missing column should fail.
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
@@ -2657,10 +2696,10 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "\
-        Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]
+          TableScan: test_table
+        ");
 
         // Check output columns has correct type
         let field = plan
@@ -2680,7 +2719,7 @@ mod tests {
         for field_name in &["a", "b"] {
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }
@@ -2732,9 +2771,23 @@ mod tests {
 
         let join = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
 
-        let _ = LogicalPlanBuilder::from(join.clone())
+        let plan = LogicalPlanBuilder::from(join.clone())
             .union(join)?
             .build()?;
+
+        assert_snapshot!(plan, @r"
+        Union
+          Cross Join: 
+            SubqueryAlias: left
+              Values: (Int32(1))
+            SubqueryAlias: right
+              Values: (Int32(1))
+          Cross Join: 
+            SubqueryAlias: left
+              Values: (Int32(1))
+            SubqueryAlias: right
+              Values: (Int32(1))
+        ");
 
         Ok(())
     }
@@ -2795,10 +2848,10 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]\
-        \n  TableScan: employee_csv projection=[id, state, salary]";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv projection=[id, state, salary]
+        ");
 
         Ok(())
     }
@@ -2817,10 +2870,37 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]\
-        \n  TableScan: employee_csv projection=[id, state, salary]";
-        assert_eq!(expected, format!("{plan}"));
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_metadata() -> Result<()> {
+        let left_schema = DFSchema::new_with_metadata(
+            vec![(None, Arc::new(Field::new("a", DataType::Int32, false)))],
+            HashMap::from([("key".to_string(), "left".to_string())]),
+        )?;
+        let right_schema = DFSchema::new_with_metadata(
+            vec![(None, Arc::new(Field::new("b", DataType::Int32, false)))],
+            HashMap::from([("key".to_string(), "right".to_string())]),
+        )?;
+
+        let join_schema =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left)?;
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "left".to_string())])
+        );
+        let join_schema =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right)?;
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "right".to_string())])
+        );
 
         Ok(())
     }
