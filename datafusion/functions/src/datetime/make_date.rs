@@ -271,6 +271,7 @@ mod tests {
     fn invoke_make_date_with_args(
         args: Vec<ColumnarValue>,
         number_rows: usize,
+        safe: bool,
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
@@ -282,7 +283,7 @@ mod tests {
             number_rows,
             return_field: Field::new("f", DataType::Date32, true).into(),
         };
-        MakeDateFunc::new().invoke_with_args(args)
+        MakeDateFunc::new_with_safe(safe).invoke_with_args(args)
     }
 
     #[test]
@@ -294,6 +295,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -310,6 +312,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -326,6 +329,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -346,6 +350,7 @@ mod tests {
                 ColumnarValue::Array(days),
             ],
             batch_len,
+            false,
         )
         .unwrap();
 
@@ -369,6 +374,7 @@ mod tests {
         let res = invoke_make_date_with_args(
             vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -383,6 +389,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -397,6 +404,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -404,18 +412,17 @@ mod tests {
         );
 
         // should not error when using safe mode
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let res = MakeDateFunc::new_with_safe(true)
-            .invoke_with_args(args)
-            .expect("that make_date parsed values without error");
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error");
+
         if let ColumnarValue::Scalar(ScalarValue::Null) = res {
             // this is what we expect
         } else {
@@ -423,18 +430,17 @@ mod tests {
         }
 
         // should not error when using safe mode
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(999))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let res = MakeDateFunc::new_with_safe(true)
-            .invoke_with_args(args)
-            .expect("that make_date parsed values without error in safe mode");
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
         if let ColumnarValue::Scalar(ScalarValue::Null) = res {
             // this is what we expect
         } else {
@@ -449,6 +455,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -456,18 +463,17 @@ mod tests {
         );
 
         // should not error when using safe mode
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(12))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
             ],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let res = MakeDateFunc::new_with_safe(true)
-            .invoke_with_args(args)
-            .expect("that make_date parsed values without error in safe mode");
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
         if let ColumnarValue::Scalar(ScalarValue::Null) = res {
             // this is what we expect
         } else {
@@ -475,18 +481,17 @@ mod tests {
         }
 
         // should not error when using safe mode
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(12))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(341))),
             ],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let res = MakeDateFunc::new_with_safe(true)
-            .invoke_with_args(args)
-            .expect("that make_date parsed values without error in safe mode");
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
         if let ColumnarValue::Scalar(ScalarValue::Null) = res {
             // this is what we expect
         } else {
