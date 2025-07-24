@@ -330,7 +330,7 @@ impl ToTimestampNanosFunc {
 
 const SAFE_CAST_OPTIONS: CastOptions = CastOptions {
     safe: true,
-    format_options: DEFAULT_FORMAT_OPTIONS
+    format_options: DEFAULT_FORMAT_OPTIONS,
 };
 
 /// to_timestamp SQL function
@@ -396,25 +396,23 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 )?;
                 match self.safe {
                     true => Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
-                            &rescaled,
-                            &Timestamp(Nanosecond, None),
-                            &CastOptions {
-                                safe: true,
-                                format_options: DEFAULT_FORMAT_OPTIONS
-                            },
-                        )?)),
+                        &rescaled,
+                        &Timestamp(Nanosecond, None),
+                        &CastOptions {
+                            safe: true,
+                            format_options: DEFAULT_FORMAT_OPTIONS,
+                        },
+                    )?)),
                     false => Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
-                            &rescaled,
-                            &Timestamp(Nanosecond, None),
-                            &DEFAULT_CAST_OPTIONS,
-                        )?))
+                        &rescaled,
+                        &Timestamp(Nanosecond, None),
+                        &DEFAULT_CAST_OPTIONS,
+                    )?)),
                 }
-            },
+            }
             Timestamp(_, Some(tz)) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Nanosecond, Some(tz)),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, Some(tz)), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None),
             },
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
@@ -445,7 +443,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                     }
                     _ => exec_err!("Invalid decimal value"),
                 }
-            },
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp",
@@ -560,17 +558,13 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         match args[0].data_type() {
             Null | Int32 | Int64 | Timestamp(_, None) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Millisecond, None),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Millisecond, None), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Millisecond, None), None),
             },
             Timestamp(_, Some(tz)) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Millisecond, Some(tz)),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Millisecond, Some(tz)), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None),
             },
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
@@ -627,17 +621,13 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         match args[0].data_type() {
             Null | Int32 | Int64 | Timestamp(_, None) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Microsecond, None),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Microsecond, None), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Microsecond, None), None),
             },
             Timestamp(_, Some(tz)) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Microsecond, Some(tz)),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Microsecond, Some(tz)), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None),
             },
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
@@ -699,10 +689,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 false => args[0].cast_to(&Timestamp(Nanosecond, None), None),
             },
             Timestamp(_, Some(tz)) => match self.safe {
-                true => args[0].cast_to(
-                    &Timestamp(Nanosecond, Some(tz)),
-                    Some(&SAFE_CAST_OPTIONS),
-                ),
+                true => args[0]
+                    .cast_to(&Timestamp(Nanosecond, Some(tz)), Some(&SAFE_CAST_OPTIONS)),
                 false => args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None),
             },
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(

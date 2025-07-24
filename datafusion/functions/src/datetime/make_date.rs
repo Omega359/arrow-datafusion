@@ -515,6 +515,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            true,
         )
         .expect("that make_date parsed values without error");
 
