@@ -1882,6 +1882,7 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
+ "tracing",
  "url",
  "uuid",
  "xz2",
@@ -2524,6 +2525,7 @@ dependencies = [
  "rstest_reuse",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

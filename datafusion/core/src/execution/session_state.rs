@@ -79,6 +79,7 @@ use log::{debug, info};
 use object_store::ObjectStore;
 use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
+use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -563,6 +564,7 @@ impl SessionState {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
+    #[instrument(skip(self))]
     pub fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -649,6 +651,7 @@ impl SessionState {
     /// be handled by another layer, typically [`SessionContext`].
     ///
     /// [`SessionContext`]: crate::execution::context::SessionContext
+    #[instrument(skip(self, logical_plan))]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1919,6 +1922,7 @@ struct DefaultQueryPlanner {}
 #[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
+    #[instrument(skip_all)]
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,

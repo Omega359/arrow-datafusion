@@ -55,6 +55,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::stream::{StreamExt, TryStreamExt};
+use tracing::instrument;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -1086,6 +1087,7 @@ pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
+#[instrument(skip_all)]
 pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1102,6 +1104,7 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[instrument(skip_all)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,

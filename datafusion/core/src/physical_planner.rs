@@ -102,6 +102,7 @@ use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -177,6 +178,7 @@ pub struct DefaultPhysicalPlanner {
 #[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
+    #[instrument(skip_all)]
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -280,6 +282,7 @@ impl DefaultPhysicalPlanner {
     }
 
     /// Create a physical plan from a logical plan
+    #[instrument(skip_all)]
     async fn create_initial_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -2007,6 +2010,7 @@ impl DefaultPhysicalPlanner {
         )))
     }
 
+    #[instrument(skip_all)]
     async fn handle_analyze(
         &self,
         a: &Analyze,
@@ -2025,6 +2029,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
+    #[instrument(skip_all)]
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,

@@ -71,6 +71,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_sql::TableReference;
+use tracing::instrument;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -274,6 +275,7 @@ impl DataFrame {
     }
 
     /// Consume the DataFrame and produce a physical plan
+    #[instrument(skip(self))]
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
@@ -1370,6 +1372,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[instrument(skip(self))]
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
@@ -1825,6 +1828,7 @@ impl DataFrame {
     /// Data is written to the table using the [`TableProvider::insert_into`]
     /// method. This is the same underlying implementation used by SQL `INSERT
     /// INTO` statements.
+    #[instrument(skip_all)]
     pub async fn write_table(
         self,
         table_name: &str,
