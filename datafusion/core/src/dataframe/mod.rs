@@ -1372,7 +1372,6 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    #[instrument(skip(self))]
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
