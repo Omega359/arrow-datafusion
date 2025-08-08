@@ -23,7 +23,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{assert_expected_schema, InvariantLevel};
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
@@ -330,9 +330,13 @@ impl Optimizer {
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
+            let pass_start = Instant::now();
+
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                let rule_start = Instant::now();
+
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -407,6 +411,14 @@ impl Optimizer {
                         )));
                     }
                 }
+
+                if rule_start.elapsed().as_millis() > 50 {
+                    info!(
+                        "Optimization for rule {} took > 50ms: {}",
+                        rule.name(),
+                        rule_start.elapsed().as_millis()
+                    );
+                }
             }
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
@@ -415,11 +427,26 @@ impl Optimizer {
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {i} did not make changes");
+                info!(
+                    "optimizer pass {i} did not make changes. Processing time: {}ms",
+                    pass_start.elapsed().as_millis()
+                );
                 break;
             }
+
+            info!(
+                "Processing time for pass {i} was {}ms",
+                pass_start.elapsed().as_millis()
+            );
+
             i += 1;
         }
+
+        info!(
+            "Processing time for {} passes was {}ms",
+            options.optimizer.max_passes,
+            start_time.elapsed().as_millis()
+        );
 
         // verify that the optimizer passes only mutated what was permitted.
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
@@ -434,7 +461,9 @@ impl Optimizer {
             })?;
 
         log_plan("Final optimized plan", &new_plan);
-        debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
+
+        info!("Optimizer took {} ms", start_time.elapsed().as_millis());
+
         Ok(new_plan)
     }
 }

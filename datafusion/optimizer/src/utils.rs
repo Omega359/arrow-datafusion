@@ -27,14 +27,14 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
-use datafusion_physical_expr::create_physical_expr;
-use log::{debug, trace};
-use std::sync::Arc;
-
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
+use datafusion_physical_expr::create_physical_expr;
+use log::Level::{Debug, Trace};
+use log::{debug, info, trace};
+use std::sync::Arc;
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
@@ -64,6 +64,12 @@ pub(crate) fn replace_qualified_name(
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
+    if log::log_enabled!(Debug) {
+        info!("debug logging in datafusion is enabled!?!")
+    }
+    if log::log_enabled!(Trace) {
+        info!("trace logging in datafusion is enabled!?!")
+    }
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }

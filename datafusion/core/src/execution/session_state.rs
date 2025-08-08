@@ -564,7 +564,7 @@ impl SessionState {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -651,7 +651,7 @@ impl SessionState {
     /// be handled by another layer, typically [`SessionContext`].
     ///
     /// [`SessionContext`]: crate::execution::context::SessionContext
-    #[instrument(skip(self, logical_plan))]
+    #[instrument(skip_all)]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,

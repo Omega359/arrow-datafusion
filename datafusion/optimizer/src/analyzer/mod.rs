@@ -20,7 +20,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use log::debug;
+use log::info;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
@@ -163,6 +163,10 @@ impl Analyzer {
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
+        info!(
+            "Analyzer::execute_and_check rule processing took {} ms",
+            start_time.elapsed().as_millis()
+        );
 
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
         new_plan
@@ -170,7 +174,10 @@ impl Analyzer {
             .map_err(|e| e.context("Invalid (non-executable) plan after Analyzer"))?;
 
         log_plan("Final analyzed plan", &new_plan);
-        debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
+        info!(
+            "Analyzer::execute_and_check took {} ms",
+            start_time.elapsed().as_millis()
+        );
         Ok(new_plan)
     }
 }
