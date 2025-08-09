@@ -414,7 +414,7 @@ impl Optimizer {
 
                 if rule_start.elapsed().as_millis() > 50 {
                     info!(
-                        "Optimization for rule {} took > 50ms: {}",
+                        "Optimization for rule {} took > 50ms: {} ms",
                         rule.name(),
                         rule_start.elapsed().as_millis()
                     );
@@ -428,7 +428,7 @@ impl Optimizer {
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
                 info!(
-                    "optimizer pass {i} did not make changes. Processing time: {}ms",
+                    "optimizer pass {i} did not make changes. Processing time: {} ms",
                     pass_start.elapsed().as_millis()
                 );
                 break;

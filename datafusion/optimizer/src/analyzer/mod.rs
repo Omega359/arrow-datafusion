@@ -157,12 +157,19 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
+            let rule_start = Instant::now();
             new_plan = rule
                 .analyze(new_plan, config)
                 .map_err(|e| e.context(rule.name()))?;
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
+            info!(
+                "Analyzer::execute_and_check rule {} took {} ms",
+                rule.name(),
+                rule_start.elapsed().as_millis()
+            );
         }
+
         info!(
             "Analyzer::execute_and_check rule processing took {} ms",
             start_time.elapsed().as_millis()
