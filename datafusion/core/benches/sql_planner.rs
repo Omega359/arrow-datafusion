@@ -25,13 +25,21 @@ mod data_utils;
 use crate::criterion::Criterion;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow_schema::TimeUnit::Nanosecond;
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use datafusion::prelude::DataFrame;
 use datafusion_common::ScalarValue;
-use datafusion_expr::col;
+use datafusion_expr::Expr::Literal;
+use datafusion_expr::{cast, col, lit, not, try_cast, when};
+use datafusion_functions::expr_fn::{
+    btrim, length, regexp_like, regexp_replace, to_timestamp, upper,
+};
+use std::ops::Rem;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
 use test_utils::TableDef;
@@ -56,6 +64,150 @@ fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
             .await
             .unwrap()
     }));
+}
+
+/// Build a dataframe for testing logical plan optimization
+fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
+    register_string_table(ctx, 100, 1000);
+
+    rt.block_on(async {
+        let mut df = ctx.table("t").await.unwrap();
+        // add some columns in
+        for i in 100..150 {
+            df = df
+                .with_column(&format!("c{i}"), Literal(ScalarValue::Utf8(None), None))
+                .unwrap();
+        }
+        // add in some columns with string encoded timestamps
+        for i in 150..175 {
+            df = df
+                .with_column(
+                    &format!("c{i}"),
+                    Literal(ScalarValue::Utf8(Some("2025-08-21 09:43:17".into())), None),
+                )
+                .unwrap();
+        }
+        // do a bunch of ops on the columns
+        for i in 0..175 {
+            // trim the columns
+            df = df
+                .with_column(&format!("c{i}"), btrim(vec![col(format!("c{i}"))]))
+                .unwrap();
+        }
+
+        for i in 0..175 {
+            let c_name = format!("c{i}");
+            let c = col(&c_name);
+
+            // random ops
+            if i % 5 == 0 && i < 150 {
+                // the actual ops here are largely unimportant as they are just a sample
+                // of ops that could occur on a dataframe
+                df = df
+                    .with_column(&c_name, cast(c.clone(), DataType::Utf8))
+                    .unwrap()
+                    .with_column(
+                        &c_name,
+                        when(
+                            cast(c.clone(), DataType::Int32).gt(lit(135)),
+                            cast(
+                                cast(c.clone(), DataType::Int32) - lit(i + 3),
+                                DataType::Utf8,
+                            ),
+                        )
+                            .otherwise(c.clone())
+                            .unwrap(),
+                    )
+                    .unwrap()
+                    .with_column(
+                        &c_name,
+                        when(
+                            c.clone().is_not_null().and(
+                                cast(c.clone(), DataType::Int32)
+                                    .between(lit(120), lit(130)),
+                            ),
+                            Literal(ScalarValue::Utf8(None), None),
+                        )
+                            .otherwise(
+                                when(
+                                    c.clone().is_not_null().and(regexp_like(
+                                        cast(c.clone(), DataType::Utf8View),
+                                        lit("[0-9]*"),
+                                        None,
+                                    )),
+                                    upper(c.clone()),
+                                )
+                                    .otherwise(c.clone())
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                    )
+                    .unwrap()
+                    .with_column(
+                        &c_name,
+                        when(
+                            c.clone().is_not_null().and(
+                                cast(c.clone(), DataType::Int32)
+                                    .between(lit(90), lit(100)),
+                            ),
+                            cast(c.clone(), DataType::Utf8View),
+                        )
+                            .otherwise(Literal(ScalarValue::Date32(None), None))
+                            .unwrap(),
+                    )
+                    .unwrap()
+                    .with_column(
+                        &c_name,
+                        when(
+                            c.clone().is_not_null().and(
+                                cast(c.clone(), DataType::Int32).rem(lit(10)).gt(lit(7)),
+                            ),
+                            regexp_replace(
+                                cast(c.clone(), DataType::Utf8View),
+                                lit("1"),
+                                lit("a"),
+                                None,
+                            ),
+                        )
+                            .otherwise(Literal(ScalarValue::Date32(None), None))
+                            .unwrap(),
+                    )
+                    .unwrap()
+            }
+            if i >= 150 {
+                df = df
+                    .with_column(
+                        &c_name,
+                        try_cast(
+                            to_timestamp(vec![c.clone(), lit("%Y-%m-%d %H:%M:%S")]),
+                            DataType::Timestamp(Nanosecond, Some("UTC".into())),
+                        ),
+                    )
+                    .unwrap()
+                    .with_column(&c_name, try_cast(c.clone(), DataType::Date32))
+                    .unwrap()
+            }
+
+            // add in a few unions
+            if i % 30 == 0 {
+                let df1 = df
+                    .clone()
+                    .filter(length(c.clone()).gt(lit(2)))
+                    .unwrap()
+                    .with_column(&format!("c{i}_filtered"), lit(true))
+                    .unwrap();
+                let df2 = df
+                    .filter(not(length(c.clone()).gt(lit(2))))
+                    .unwrap()
+                    .with_column(&format!("c{i}_filtered"), lit(false))
+                    .unwrap();
+
+                df = df1.union_by_name(df2).unwrap()
+            }
+        }
+
+        df
+    })
 }
 
 /// Create schema with the specified number of columns
@@ -94,7 +246,7 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
         )
-        .unwrap();
+            .unwrap();
     });
     ctx
 }
@@ -180,13 +332,40 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
     ctx.register_table("t", Arc::new(table)).unwrap();
 }
 
+/// Registers a table like this:
+/// c0,c1,c2...,c99
+/// "0","100"..."9900"
+/// "0","200"..."19800"
+/// "0","300"..."29700"
+fn register_string_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
+    // ("c0", ["0", "0", ...])
+    // ("c1": ["100", "200", ...])
+    // etc
+    let iter = (0..num_columns).map(|i| i as u64).map(|i| {
+        let array: ArrayRef = Arc::new(arrow::array::StringViewArray::from_iter_values(
+            (0..num_rows)
+                .map(|j| format!("c{}", j as u64 * 100 + i))
+                .collect::<Vec<_>>(),
+        ));
+        (format!("c{i}"), array)
+    });
+    let batch = RecordBatch::try_from_iter(iter).unwrap();
+    let schema = batch.schema();
+    let partitions = vec![vec![batch]];
+
+    // create the table
+    let table = MemTable::try_new(schema, partitions).unwrap();
+
+    ctx.register_table("t", Arc::new(table)).unwrap();
+}
+
 /// return a query like
 /// ```sql
-/// select c1, null as c2, ... null as cn from t ORDER BY c1
+/// select c1, 2 as c2, ... n as cn from t ORDER BY c1
 ///   UNION ALL
-/// select null as c1, c2, ... null as cn from t ORDER BY c2
+/// select 1 as c1, c2, ... n as cn from t ORDER BY c2
 /// ...
-/// select null as c1, null as c2, ... cn from t ORDER BY cn
+/// select 1 as c1, 2 as c2, ... cn from t ORDER BY cn
 ///  ORDER BY c1, c2 ... CN
 /// ```
 fn union_orderby_query(n: usize) -> String {
@@ -200,7 +379,7 @@ fn union_orderby_query(n: usize) -> String {
                 if i == j {
                     format!("c{j}")
                 } else {
-                    format!("null as c{j}")
+                    format!("{j} as c{j}")
                 }
             })
             .collect::<Vec<_>>()
@@ -218,6 +397,8 @@ fn union_orderby_query(n: usize) -> String {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    env_logger::init();
+
     // verify that we can load the clickbench data prior to running the benchmark
     if !PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists()
         && !PathBuf::from(format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")).exists()
@@ -229,156 +410,177 @@ fn criterion_benchmark(c: &mut Criterion) {
     let ctx = create_context();
     let rt = Runtime::new().unwrap();
 
-    // Test simplest
-    // https://github.com/apache/datafusion/issues/5157
-    c.bench_function("logical_select_one_from_700", |b| {
-        b.iter(|| logical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
-    });
+    // // Test simplest
+    // // https://github.com/apache/datafusion/issues/5157
+    // c.bench_function("logical_select_one_from_700", |b| {
+    //     b.iter(|| logical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
+    // });
+    //
+    // // Test simplest
+    // // https://github.com/apache/datafusion/issues/5157
+    // c.bench_function("physical_select_one_from_700", |b| {
+    //     b.iter(|| physical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
+    // });
+    //
+    // // Test simplest
+    // c.bench_function("logical_select_all_from_1000", |b| {
+    //     b.iter(|| logical_plan(&ctx, &rt, "SELECT * FROM t1000"))
+    // });
+    //
+    // // Test simplest
+    // c.bench_function("physical_select_all_from_1000", |b| {
+    //     b.iter(|| physical_plan(&ctx, &rt, "SELECT * FROM t1000"))
+    // });
+    //
+    // c.bench_function("logical_trivial_join_low_numbered_columns", |b| {
+    //     b.iter(|| {
+    //         logical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a2, t2.b2  \
+    //              FROM t1, t2 WHERE a1 = b1",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("logical_trivial_join_high_numbered_columns", |b| {
+    //     b.iter(|| {
+    //         logical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a99, t2.b99  \
+    //              FROM t1, t2 WHERE a199 = b199",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("logical_aggregate_with_join", |b| {
+    //     b.iter(|| {
+    //         logical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a99, MIN(t2.b1), MAX(t2.b199), AVG(t2.b123), COUNT(t2.b73)  \
+    //              FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("physical_select_aggregates_from_200", |b| {
+    //     let mut aggregates = String::new();
+    //     for i in 0..200 {
+    //         if i > 0 {
+    //             aggregates.push_str(", ");
+    //         }
+    //         aggregates.push_str(format!("MAX(a{i})").as_str());
+    //     }
+    //     let query = format!("SELECT {aggregates} FROM t1");
+    //     b.iter(|| {
+    //         physical_plan(&ctx, &rt, &query);
+    //     });
+    // });
+    //
+    // // Benchmark for Physical Planning Joins
+    // c.bench_function("physical_join_consider_sort", |b| {
+    //     b.iter(|| {
+    //         physical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a7, t2.b8  \
+    //              FROM t1, t2 WHERE a7 = b7 \
+    //              ORDER BY a7",
+    //         );
+    //     });
+    // });
+    //
+    // c.bench_function("physical_theta_join_consider_sort", |b| {
+    //     b.iter(|| {
+    //         physical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a7, t2.b8  \
+    //              FROM t1, t2 WHERE a7 < b7 \
+    //              ORDER BY a7",
+    //         );
+    //     });
+    // });
+    //
+    // c.bench_function("physical_many_self_joins", |b| {
+    //     b.iter(|| {
+    //         physical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT ta.a9, tb.a10, tc.a11, td.a12, te.a13, tf.a14 \
+    //              FROM t1 AS ta, t1 AS tb, t1 AS tc, t1 AS td, t1 AS te, t1 AS tf \
+    //              WHERE ta.a9 = tb.a10 AND tb.a10 = tc.a11 AND tc.a11 = td.a12 AND \
+    //              td.a12 = te.a13 AND te.a13 = tf.a14",
+    //         );
+    //     });
+    // });
+    //
+    // c.bench_function("physical_unnest_to_join", |b| {
+    //     b.iter(|| {
+    //         physical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a7  \
+    //              FROM t1 WHERE a7 = (SELECT b8 FROM t2)",
+    //         );
+    //     });
+    // });
+    //
+    // c.bench_function("physical_intersection", |b| {
+    //     b.iter(|| {
+    //         physical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT t1.a7 FROM t1  \
+    //              INTERSECT SELECT t2.b8 FROM t2",
+    //         );
+    //     });
+    // });
+    // // these two queries should be equivalent
+    // c.bench_function("physical_join_distinct", |b| {
+    //     b.iter(|| {
+    //         logical_plan(
+    //             &ctx,
+    //             &rt,
+    //             "SELECT DISTINCT t1.a7  \
+    //              FROM t1, t2 WHERE t1.a7 = t2.b8",
+    //         );
+    //     });
+    // });
+    //
+    // // -- Sorted Queries --
+    // for column_count in [10, 50, 100, 200, 300] {
+    //     register_union_order_table(&ctx, column_count, 1000);
+    //
+    //     // this query has many expressions in its sort order so stresses
+    //     // order equivalence validation
+    //     c.bench_function(
+    //         &format!("physical_sorted_union_order_by_{column_count}"),
+    //         |b| {
+    //             // SELECT ... UNION ALL ...
+    //             let query = union_orderby_query(column_count);
+    //             b.iter(|| physical_plan(&ctx, &rt, &query))
+    //         },
+    //     );
+    //
+    //     let _ = ctx.deregister_table("t");
+    // }
 
-    // Test simplest
-    // https://github.com/apache/datafusion/issues/5157
-    c.bench_function("physical_select_one_from_700", |b| {
-        b.iter(|| physical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
-    });
+    // -- validate logical plan optimize performance
+    let df = build_test_data_frame(&ctx, &rt);
 
-    // Test simplest
-    c.bench_function("logical_select_all_from_1000", |b| {
-        b.iter(|| logical_plan(&ctx, &rt, "SELECT * FROM t1000"))
-    });
-
-    // Test simplest
-    c.bench_function("physical_select_all_from_1000", |b| {
-        b.iter(|| physical_plan(&ctx, &rt, "SELECT * FROM t1000"))
-    });
-
-    c.bench_function("logical_trivial_join_low_numbered_columns", |b| {
+    c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
-            logical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a2, t2.b2  \
-                 FROM t1, t2 WHERE a1 = b1",
-            )
+            let df_clone = df.clone();
+            criterion::black_box(
+                rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
+            );
         })
     });
 
-    c.bench_function("logical_trivial_join_high_numbered_columns", |b| {
-        b.iter(|| {
-            logical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a99, t2.b99  \
-                 FROM t1, t2 WHERE a199 = b199",
-            )
-        })
-    });
-
-    c.bench_function("logical_aggregate_with_join", |b| {
-        b.iter(|| {
-            logical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a99, MIN(t2.b1), MAX(t2.b199), AVG(t2.b123), COUNT(t2.b73)  \
-                 FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
-            )
-        })
-    });
-
-    c.bench_function("physical_select_aggregates_from_200", |b| {
-        let mut aggregates = String::new();
-        for i in 0..200 {
-            if i > 0 {
-                aggregates.push_str(", ");
-            }
-            aggregates.push_str(format!("MAX(a{i})").as_str());
-        }
-        let query = format!("SELECT {aggregates} FROM t1");
-        b.iter(|| {
-            physical_plan(&ctx, &rt, &query);
-        });
-    });
-
-    // Benchmark for Physical Planning Joins
-    c.bench_function("physical_join_consider_sort", |b| {
-        b.iter(|| {
-            physical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a7, t2.b8  \
-                 FROM t1, t2 WHERE a7 = b7 \
-                 ORDER BY a7",
-            );
-        });
-    });
-
-    c.bench_function("physical_theta_join_consider_sort", |b| {
-        b.iter(|| {
-            physical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a7, t2.b8  \
-                 FROM t1, t2 WHERE a7 < b7 \
-                 ORDER BY a7",
-            );
-        });
-    });
-
-    c.bench_function("physical_many_self_joins", |b| {
-        b.iter(|| {
-            physical_plan(
-                &ctx,
-                &rt,
-                "SELECT ta.a9, tb.a10, tc.a11, td.a12, te.a13, tf.a14 \
-                 FROM t1 AS ta, t1 AS tb, t1 AS tc, t1 AS td, t1 AS te, t1 AS tf \
-                 WHERE ta.a9 = tb.a10 AND tb.a10 = tc.a11 AND tc.a11 = td.a12 AND \
-                 td.a12 = te.a13 AND te.a13 = tf.a14",
-            );
-        });
-    });
-
-    c.bench_function("physical_unnest_to_join", |b| {
-        b.iter(|| {
-            physical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a7  \
-                 FROM t1 WHERE a7 = (SELECT b8 FROM t2)",
-            );
-        });
-    });
-
-    c.bench_function("physical_intersection", |b| {
-        b.iter(|| {
-            physical_plan(
-                &ctx,
-                &rt,
-                "SELECT t1.a7 FROM t1  \
-                 INTERSECT SELECT t2.b8 FROM t2",
-            );
-        });
-    });
-    // these two queries should be equivalent
-    c.bench_function("physical_join_distinct", |b| {
-        b.iter(|| {
-            logical_plan(
-                &ctx,
-                &rt,
-                "SELECT DISTINCT t1.a7  \
-                 FROM t1, t2 WHERE t1.a7 = t2.b8",
-            );
-        });
-    });
-
-    // -- Sorted Queries --
-    register_union_order_table(&ctx, 100, 1000);
-
-    // this query has many expressions in its sort order so stresses
-    // order equivalence validation
-    c.bench_function("physical_sorted_union_orderby", |b| {
-        // SELECT ... UNION ALL ...
-        let query = union_orderby_query(20);
-        b.iter(|| physical_plan(&ctx, &rt, &query))
-    });
+    let _ = ctx.deregister_table("t");
 
     // --- TPC-H ---
 
@@ -468,13 +670,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             std::fs::read_to_string(format!(
                 "{benchmarks_path}queries/clickbench/queries/q{q}.sql"
             ))
-            .unwrap()
+                .unwrap()
         })
         .chain((0..=7).map(|q| {
             std::fs::read_to_string(format!(
                 "{benchmarks_path}queries/clickbench/extended/q{q}.sql"
             ))
-            .unwrap()
+                .unwrap()
         }))
         .collect::<Vec<_>>();
 
