@@ -66,7 +66,7 @@ impl NowFunc {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from(config.execution.time_zone.as_str())),
+            timezone: config.execution.time_zone.as_ref().map(|tz| Arc::from(tz.as_ref())),
         }
     }
 }

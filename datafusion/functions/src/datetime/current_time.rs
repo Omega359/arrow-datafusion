@@ -104,12 +104,17 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let nano = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| config.execution.time_zone.as_ref().map(|tz| tz.parse::<Tz>().ok()))
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
-                    let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
-                    datetime_to_time_nanos(&local_now)
+                    match tz {
+                        Some(tz) => {
+                            let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                            datetime_to_time_nanos(&local_now)
+                        },
+                        None => datetime_to_time_nanos(&now_ts),
+                    }                    
                 },
             );
 
@@ -167,7 +172,7 @@ mod tests {
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
         let mut config = datafusion_common::config::ConfigOptions::default();
-        config.execution.time_zone = tz.to_string();
+        config.execution.time_zone = Some(tz.to_string());
         let mut execution_props =
             ExecutionProps::new().with_query_execution_start_time(start_time);
         execution_props.config_options = Some(Arc::new(config));
