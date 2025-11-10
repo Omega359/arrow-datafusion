@@ -20,20 +20,23 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
-    TimeUnit,
+    ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date};
 
+use super::adjust_to_local_time;
 use datafusion_common::{
     Result, ScalarValue,
     cast::{
@@ -133,7 +136,7 @@ impl DatePartFunc {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("datepart")],
+            aliases: vec![String::from("datepart"), String::from("extract")],
         }
     }
 }
@@ -183,6 +186,7 @@ impl ScalarUDFImpl for DatePartFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let config = &args.config_options;
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
@@ -192,8 +196,8 @@ impl ScalarUDFImpl for DatePartFunc {
             v
         } else {
             return exec_err!(
-                "First argument of `DATE_PART` must be non-null scalar Utf8"
-            );
+"First argument of `DATE_PART` must be non-null scalar Utf8"
+);
         };
 
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
@@ -203,7 +207,72 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
+        let (is_timezone_aware, tz_str_opt) = match array.data_type() {
+            Timestamp(_, Some(tz_str)) => (true, Some(Arc::clone(tz_str))),
+            _ => (false, None),
+        };
+
         let part_trim = part_normalization(&part);
+        let is_epoch = is_epoch(part_trim);
+
+        // Epoch is timezone-independent - it always returns seconds since 1970-01-01 UTC
+        let array = if is_epoch {
+            array
+        } else if is_timezone_aware {
+            // For timezone-aware timestamps, extract in their own timezone
+            match tz_str_opt.as_ref() {
+                Some(tz_str) => {
+                    let tz = interpret_session_timezone(tz_str)?;
+                    match array.data_type() {
+                        Timestamp(time_unit, _) => match time_unit {
+                            Nanosecond => adjust_timestamp_array::<
+                                TimestampNanosecondType,
+                            >(&array, tz)?,
+                            Microsecond => adjust_timestamp_array::<
+                                TimestampMicrosecondType,
+                            >(&array, tz)?,
+                            Millisecond => adjust_timestamp_array::<
+                                TimestampMillisecondType,
+                            >(&array, tz)?,
+                            Second => {
+                                adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
+                            }
+                        },
+                        _ => array,
+                    }
+                }
+                None => array,
+            }
+        } else if let Timestamp(time_unit, None) = array.data_type() {
+            // For naive timestamps, interpret in session timezone if available
+            match config.execution.time_zone.as_ref() {
+                Some(tz_str) => {
+                    let tz = interpret_session_timezone(tz_str)?;
+
+                    match time_unit {
+                        Nanosecond => {
+                            adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
+                        }
+                        Microsecond => {
+                            adjust_timestamp_array::<TimestampMicrosecondType>(
+                                &array, tz,
+                            )?
+                        }
+                        Millisecond => {
+                            adjust_timestamp_array::<TimestampMillisecondType>(
+                                &array, tz,
+                            )?
+                        }
+                        Second => {
+                            adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
+                        }
+                    }
+                }
+                None => array,
+            }
+        } else {
+            array
+        };
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
@@ -316,6 +385,24 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 }
 
+fn adjust_timestamp_array<T: ArrowTimestampType>(
+    array: &ArrayRef,
+    tz: Tz,
+) -> Result<ArrayRef> {
+    let mut builder = PrimitiveBuilder::<T>::new();
+    let primitive_array = as_primitive_array::<T>(array)?;
+    for ts_opt in primitive_array.iter() {
+        match ts_opt {
+            None => builder.append_null(),
+            Some(ts) => {
+                let adjusted_ts = adjust_to_local_time::<T>(ts, tz)?;
+                builder.append_value(adjusted_ts);
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 fn is_epoch(part: &str) -> bool {
     let part = part_normalization(part);
     matches!(part.to_lowercase().as_str(), "epoch")
@@ -368,6 +455,8 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
+// Try to remove quote if exist, if the quote is invalid, return original string
+// and let the downstream function handle the error.
 fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
@@ -377,6 +466,13 @@ fn part_normalization(part: &str) -> &str {
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
 /// nanoseconds
+fn interpret_session_timezone(tz_str: &str) -> Result<Tz> {
+    match tz_str.parse::<Tz>() {
+        Ok(tz) => Ok(tz),
+        Err(err) => exec_err!("Invalid timezone '{tz_str}': {err}"),
+    }
+}
+
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
     // with overflow and precision issue we don't support nanosecond
@@ -432,6 +528,8 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
 /// nanoseconds
 ///
 /// Given epoch return f64, this is a duplicated function to optimize for f64 type
+// Converts seconds to f64 with the specified time unit.
+// Used for Interval and Duration types that need floating-point precision.
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,
