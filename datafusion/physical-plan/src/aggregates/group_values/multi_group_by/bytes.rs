@@ -20,15 +20,15 @@ use crate::aggregates::group_values::multi_group_by::{
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
-    types::GenericStringType, Array, ArrayRef, AsArray, BufferBuilder,
-    GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait,
+    types::GenericStringType, Array, ArrayRef, AsArray, BooleanBufferBuilder,
+    BufferBuilder, GenericBinaryArray, GenericByteArray, GenericStringArray,
+    OffsetSizeTrait,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{exec_datafusion_err, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
-use itertools::izip;
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
@@ -106,25 +106,28 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
+        let last_idx = std::cmp::min(
+            std::cmp::min(lhs_rows.len(), rhs_rows.len()),
+            equal_to_results.len(),
         );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+        for idx in 0..last_idx {
+            let lhs_row = lhs_rows[idx];
+            let rhs_row = rhs_rows[idx];
+            let equal_to_result = equal_to_results.get_bit(idx);
+
             // Has found not equal to, don't need to check
-            if !*equal_to_result {
+            if !equal_to_result {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            equal_to_results
+                .set_bit(idx, self.do_equal_to_inner(lhs_row, array, rhs_row));
         }
     }
 
@@ -275,7 +278,7 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         // Sanity array type
         match self.output_type {
@@ -433,7 +436,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
-    use arrow::array::{ArrayRef, NullBufferBuilder, StringArray};
+    use arrow::array::{ArrayRef, BooleanBufferBuilder, NullBufferBuilder, StringArray};
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::binary_map::OutputType;
 
@@ -516,16 +519,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &ByteGroupValueBuilder<i32>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_byte_equal_to_internal(append, equal_to);
     }
@@ -540,18 +545,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &ByteGroupValueBuilder<i32>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_byte_equal_to_internal(append, equal_to);
     }
@@ -575,7 +581,9 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = BooleanBufferBuilder::new(all_nulls_input_array.len());
+        equal_to_results.append_n(all_nulls_input_array.len(), true);
+
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
@@ -583,11 +591,11 @@ mod tests {
             &mut equal_to_results,
         );
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(equal_to_results.get_bit(0));
+        assert!(equal_to_results.get_bit(1));
+        assert!(equal_to_results.get_bit(2));
+        assert!(equal_to_results.get_bit(3));
+        assert!(equal_to_results.get_bit(4));
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(StringArray::from(vec![
@@ -601,7 +609,10 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results =
+            BooleanBufferBuilder::new(all_not_nulls_input_array.len());
+        equal_to_results.append_n(all_not_nulls_input_array.len(), true);
+
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
@@ -609,11 +620,11 @@ mod tests {
             &mut equal_to_results,
         );
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(equal_to_results.get_bit(0));
+        assert!(equal_to_results.get_bit(1));
+        assert!(equal_to_results.get_bit(2));
+        assert!(equal_to_results.get_bit(3));
+        assert!(equal_to_results.get_bit(4));
     }
 
     fn test_byte_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
@@ -624,7 +635,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
         // Will cover such cases:
@@ -670,7 +681,9 @@ mod tests {
             Arc::new(StringArray::new(offsets, buffer, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = BooleanBufferBuilder::new(builder.len());
+        equal_to_results.append_n(builder.len(), true);
+
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5],
@@ -679,11 +692,11 @@ mod tests {
             &mut equal_to_results,
         );
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(!equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(equal_to_results[5]);
+        assert!(!equal_to_results.get_bit(0));
+        assert!(equal_to_results.get_bit(1));
+        assert!(equal_to_results.get_bit(2));
+        assert!(!equal_to_results.get_bit(3));
+        assert!(!equal_to_results.get_bit(4));
+        assert!(equal_to_results.get_bit(5));
     }
 }

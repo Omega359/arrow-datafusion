@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::{Int32Type, StringViewType};
 use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
@@ -118,7 +118,11 @@ fn bytes_bench(
         rows,
         input,
         "all_true",
-        vec![true; size],
+        {
+            let mut b = BooleanBufferBuilder::new(size);
+            b.append_n(size, true);
+            b
+        },
     );
     vectorized_equal_to(
         group,
@@ -130,7 +134,13 @@ fn bytes_bench(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     vectorized_equal_to(
@@ -143,7 +153,13 @@ fn bytes_bench(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     vectorized_equal_to(
@@ -156,7 +172,13 @@ fn bytes_bench(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
@@ -226,7 +248,11 @@ fn bench_single_primitive<const NULLABLE: bool>(
         rows,
         &input,
         "all_true",
-        vec![true; size],
+        {
+            let mut b = BooleanBufferBuilder::new(size);
+            b.append_n(size, true);
+            b
+        },
     );
     vectorized_equal_to(
         group,
@@ -238,7 +264,13 @@ fn bench_single_primitive<const NULLABLE: bool>(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     vectorized_equal_to(
@@ -251,7 +283,13 @@ fn bench_single_primitive<const NULLABLE: bool>(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     vectorized_equal_to(
@@ -264,7 +302,13 @@ fn bench_single_primitive<const NULLABLE: bool>(
         {
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            {
+                let mut b = BooleanBufferBuilder::new(size);
+                for _ in 0..size {
+                    b.append(d.sample(&mut rng));
+                }
+                b
+            }
         },
     );
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
@@ -278,7 +322,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     rows: &[usize],
     input: &ArrayRef,
     equal_to_result_description: &str,
-    equal_to_results: Vec<bool>,
+    equal_to_results: BooleanBufferBuilder,
 ) {
     let id = BenchmarkId::new(
         function_name,
@@ -290,7 +334,9 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
         b.iter(|| {
             // Cloning is a must as `vectorized_equal_to` will modify the input vec
             // and without cloning all benchmarks after the first one won't be meaningful
-            let mut equal_to_results = equal_to_results.clone();
+            let mut equal_to_results = BooleanBufferBuilder::new(equal_to_results.len());
+            equal_to_results.append_buffer(&equal_to_results.finish_cloned());
+
             builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
 
             // Make sure that the compiler does not optimize away the call
