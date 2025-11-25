@@ -109,23 +109,23 @@ pub mod expr_fn {
         args,
     ),(
         to_timestamp,
-        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, TimeZone)`",
         @config args,
     ),(
         to_timestamp_seconds,
-        "converts a string and optional formats to a `Timestamp(Seconds, None)`",
+        "converts a string and optional formats to a `Timestamp(Seconds, TimeZone)`",
         @config args,
     ),(
         to_timestamp_millis,
-        "converts a string and optional formats to a `Timestamp(Milliseconds, None)`",
+        "converts a string and optional formats to a `Timestamp(Milliseconds, TimeZone)`",
         @config args,
     ),(
         to_timestamp_micros,
-        "converts a string and optional formats to a `Timestamp(Microseconds, None)`",
+        "converts a string and optional formats to a `Timestamp(Microseconds, TimeZone)`",
         @config args,
     ),(
         to_timestamp_nanos,
-        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, TimeZone)`",
         @config args,
     ));
 
