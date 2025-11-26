@@ -137,6 +137,14 @@ SELECT to_timestamp('2020-09-08 13:42:29 +0000', '%Y-%m-%d %H:%M:%S %z');
 ----
 2020-09-08T13:42:29Z
 
+query P
+SELECT to_timestamp('2020-09-08 13:42:29 America/Toronto', '%Y-%m-%d %H:%M:%S %Z');
+----
+2020-09-08T17:42:29Z
+
+query error Error parsing timestamp from '2020-09-08 13:42:29America/Toronto' using format '%Y-%m-%d %H:%M:%S%Z': '%Z' is only supported at the end of the format string preceded by a space
+SELECT to_timestamp('2020-09-08 13:42:29America/Toronto', '%Y-%m-%d %H:%M:%S%Z');
+
 ## Test 17: Test all precision variants respect timezone
 statement ok
 SET datafusion.execution.time_zone = 'America/New_York';

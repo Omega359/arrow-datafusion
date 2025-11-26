@@ -46,8 +46,8 @@ Integers, unsigned integers, and doubles are interpreted as seconds since the un
 
 Note: `to_timestamp` returns `Timestamp(ns, TimeZone)` where the time zone is the session time zone. The supported range
 for integer input is between`-9223372037` and `9223372036`. Supported range for string input is between
- `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
- for the input outside of supported bounds.
+`1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
+for the input outside of supported bounds.
 
 The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
 The time zone can be a value like +00:00, 'Europe/London' etc.
@@ -75,7 +75,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. Note: parsing of named timezones is not supported (e.g. 'America/New_York'), even when using %Z format."
+        description = r#"
+Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+only supported at the end of the string preceded by a space.
+"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -119,7 +124,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. Note: parsing of named timezones is not supported (e.g. 'America/New_York'), even when using %Z format."
+        description = r#"
+Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+only supported at the end of the string preceded by a space.
+"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -163,7 +173,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. Note: parsing of named timezones is not supported (e.g. 'America/New_York'), even when using %Z format."
+        description = r#"
+Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+only supported at the end of the string preceded by a space.
+"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -207,7 +222,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. Note: parsing of named timezones is not supported (e.g. 'America/New_York'), even when using %Z format."
+        description = r#"
+Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+only supported at the end of the string preceded by a space.
+"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -250,7 +270,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "format_n",
-        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. Note: parsing of named timezones is not supported (e.g. 'America/New_York'), even when using %Z format."
+        description = r#"
+Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+only supported at the end of the string preceded by a space.
+"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1117,8 +1142,8 @@ mod tests {
                     Some("2020-09-08 08:42:29 -05:00"),
                 ),
                 (
-                    "2020-09-08 13:42:29 +0000",
-                    "%Y-%m-%d %H:%M:%S %z",
+                    "2020-09-08 13:42:29 UTC",
+                    "%Y-%m-%d %H:%M:%S %Z",
                     Some("2020-09-08 08:42:29 -05:00"),
                 ),
                 (
@@ -1285,29 +1310,36 @@ mod tests {
         };
 
         for (value, format, _expected_str) in [
-            ("2020-09-08T13:42:29Z", "%+", Some("2020-09-08T13:42:29Z")),
+            (
+                "2020-09-08 09:42:29 -05:00",
+                "%Y-%m-%d %H:%M:%S %z",
+                Some("2020-09-08 09:42:29 -05:00"),
+            ),
+            (
+                "2020-09-08T13:42:29Z",
+                "%+",
+                Some("2020-09-08 08:42:29 -05:00"),
+            ),
             (
                 "2020-09-08 13:42:29 +0000",
                 "%Y-%m-%d %H:%M:%S %z",
-                Some("2020-09-08T13:42:29+00:00"),
+                Some("2020-09-08 08:42:29 -05:00"),
             ),
             (
-                "2020-09-08T13:42:29UTC",
-                "%Y-%m-%dT%H:%M:%S%Z",
-                Some("2020-09-08T13:42:29Z"),
+                "+0000 2024-01-01 12:00:00",
+                "%z %Y-%m-%d %H:%M:%S",
+                Some("2024-01-01 07:00:00 -05:00"),
             ),
             (
-                "UTC 2024-01-01 12:00:00",
-                "%Z %Y-%m-%d %H:%M:%S",
-                Some("2024-01-01T12:00:00Z"),
+                "20200908134229+0100",
+                "%Y%m%d%H%M%S%z",
+                Some("2020-09-08 07:42:29 -05:00"),
             ),
             (
-                "2020-09-08 09:42:29 America/New_York",
-                "%Y-%m-%d %H:%M:%S %Z",
-                None,
+                "2020-09-08+0230 13:42",
+                "%Y-%m-%d%z %H:%M",
+                Some("2020-09-08 06:12:00 -05:00"),
             ),
-            ("20200908134229+0100", "%Y%m%d%H%M%S%z", None),
-            ("2020-09-08+0230 13:42", "%Y-%m-%d%z %H:%M", None),
         ] {
             let args = make_args(value, format);
             validate_expected_error(&mut options.clone(), args, expected_err);

@@ -92,6 +92,7 @@ pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<
 /// will be returned
 ///
 /// Note that parsing [IANA timezones] is not supported yet in chrono - <https://github.com/chronotope/chrono/issues/38>
+/// and this implementation only supports named timezones at the end of the string preceded by a space.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 /// [IANA timezones]: https://www.iana.org/time-zones
@@ -106,11 +107,52 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
         )
     };
 
-    let mut parsed = Parsed::new();
-    parse(&mut parsed, s, StrftimeItems::new(format)).map_err(|e| err(&e.to_string()))?;
+    let mut datetime_str = s;
+    let mut format = format;
 
-    // attempt to parse the string assuming it has a timezone
-    let dt = parsed.to_datetime();
+    // we manually handle the most common case of a named timezone at the end of the timestamp
+    // not that %+ handles 'Z' at the end of the string without a space. This code doesn't
+    // handle named timezones with no preceding space since that would require writing a
+    // custom parser (or switching to Jiff)
+    let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {
+        // grab the string after the last space as the named timezone
+        let parts: Vec<&str> = datetime_str.rsplitn(2, ' ').collect();
+        let timezone_name = parts[0];
+        datetime_str = parts[1];
+
+        // attempt to parse the timezone name
+        let result: Result<chrono_tz::Tz, chrono_tz::ParseError> = timezone_name.parse();
+        let Ok(tz) = result else {
+            return Err(err(&result.unwrap_err().to_string()));
+        };
+
+        // successfully parsed the timezone name, remove the ' %Z' from the format
+        format = format.trim_end_matches(" %Z");
+
+        Some(tz)
+    } else if format.contains("%Z") {
+        return Err(err(
+            "'%Z' is only supported at the end of the format string preceded by a space",
+        ));
+    } else {
+        None
+    };
+
+    let mut parsed = Parsed::new();
+    parse(&mut parsed, datetime_str, StrftimeItems::new(format))
+        .map_err(|e| err(&e.to_string()))?;
+
+    let dt = match tz {
+        Some(tz) => {
+            // A timezone was manually parsed out, convert it to a fixed offset
+            match parsed.to_datetime_with_timezone(&tz) {
+                Ok(dt) => Ok(dt.fixed_offset()),
+                Err(e) => Err(e),
+            }
+        }
+        // default to parse the string assuming it has a timezone
+        None => parsed.to_datetime(),
+    };
 
     if let Err(e) = &dt {
         // no timezone or other failure, try without a timezone
