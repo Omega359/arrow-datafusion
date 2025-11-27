@@ -19,7 +19,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
-use arrow::array::timezone::Tz;
 use arrow::array::Float64Array;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
@@ -34,6 +33,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use jiff::tz::TimeZone;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -793,7 +793,13 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     };
 
     let tz = match timezone.clone() {
-        Some(tz) => Some(tz.parse::<Tz>()?),
+        Some(tz) => {
+            let result = TimeZone::get(tz.as_ref());
+            match result {
+                Ok(tz) => Some(tz),
+                Err(e) => return exec_err!("Failed to get timezone {tz}: {e}"),
+            }
+        }
         None => None,
     };
 
@@ -1565,7 +1571,7 @@ mod tests {
 
         for (s, f, ctx) in cases {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
-            let actual = string_to_datetime_formatted(&Utc, s, f)
+            let actual = string_to_datetime_formatted(&TimeZone::UTC, s, f)
                 .unwrap_err()
                 .strip_backtrace();
             assert_eq!(actual, expected)
@@ -1593,7 +1599,7 @@ mod tests {
 
         for (s, f, ctx) in cases {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
-            let actual = string_to_datetime_formatted(&Utc, s, f)
+            let actual = string_to_datetime_formatted(&TimeZone::UTC, s, f)
                 .unwrap_err()
                 .strip_backtrace();
             assert_eq!(actual, expected)

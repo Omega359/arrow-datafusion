@@ -23,20 +23,21 @@ use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
-use arrow::compute::kernels::cast_utils::{
-    string_to_datetime, string_to_timestamp_nanos,
-};
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::{DataType, TimeUnit};
+use arrow::error::ArrowError;
 use arrow_buffer::ArrowNativeType;
 use chrono::format::{parse, Parsed, StrftimeItems};
-use chrono::LocalResult::Single;
-use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_datafusion_err, unwrap_or_internal_err,
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+use jiff::civil::{DateTime, Time};
+use jiff::fmt::temporal::DateTimeParser;
+use jiff::tz::{Disambiguation, TimeZone};
+use jiff::{Timestamp, Zoned};
 use num_traits::{PrimInt, ToPrimitive};
 
 /// Error message if nanosecond conversion request beyond supported interval
@@ -49,13 +50,15 @@ pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
 }
 
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: &Option<TimeZone>,
     s: &str,
 ) -> Result<i64> {
-    let tz = timezone.unwrap_or("UTC".parse()?);
+    let tz = timezone.to_owned().unwrap_or(TimeZone::UTC);
     let dt = string_to_datetime(&tz, s)?;
     let parsed = dt
-        .timestamp_nanos_opt()
+        .timestamp()
+        .as_nanosecond()
+        .to_i64()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
 
     Ok(parsed)
@@ -85,6 +88,77 @@ pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<
     Ok(())
 }
 
+static PARSER: DateTimeParser = DateTimeParser::new();
+
+/// Accepts a string and parses it relative to the provided `timezone`
+///
+/// In addition to RFC3339 / ISO8601 standard timestamps, it also
+/// accepts strings that use a space ` ` to separate the date and time
+/// as well as strings that have no explicit timezone offset.
+///
+/// Examples of accepted inputs:
+/// * `1997-01-31T09:26:56.123Z`        # RCF3339
+/// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
+/// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
+/// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
+/// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
+/// * `1997-01-31 09:26:56.123`         # close to RCF3339 but uses a space and no timezone offset
+/// * `1997-01-31 09:26:56`             # close to RCF3339, no fractional seconds
+/// * `1997-01-31 092656`               # close to RCF3339, no fractional seconds
+/// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
+/// * `1997-01-31`                      # close to RCF3339, only date no time
+///
+/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` feature is enabled
+///
+/// * `2023-01-01 040506 America/Los_Angeles`
+///
+/// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
+/// will be returned
+///
+/// Some formats supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
+/// are not supported, like
+///
+/// * "2023-01-01 04:05:06.789 +07:30:00",
+/// * "2023-01-01 040506 +07:30:00",
+/// * "2023-01-01 04:05:06.789 PST",
+///
+/// [IANA timezones]: https://www.iana.org/time-zones
+pub(crate) fn string_to_datetime(
+    timezone: &TimeZone,
+    s: &str,
+) -> std::result::Result<Zoned, ArrowError> {
+    let err = |ctx: &str| {
+        ArrowError::ParseError(format!("Error parsing timestamp from '{s}': {ctx}"))
+    };
+
+    if s.len() < 10 {
+        return Err(err("timestamp must contain at least 10 characters"));
+    }
+
+    let result = PARSER.parse_timestamp(s);
+    match result {
+        Ok(r) => Ok(r.to_zoned(timezone.to_owned())),
+        Err(_) => {
+            let datetime = if s.len() == 10 {
+                let date = PARSER
+                    .parse_date(s)
+                    .map_err(|_| err("error parsing date"))?;
+                date.to_datetime(Time::midnight())
+            } else {
+                PARSER
+                    .parse_datetime(s)
+                    .map_err(|_| err("error parsing timestamp"))?
+            };
+
+            timezone
+                .to_owned()
+                .into_ambiguous_zoned(datetime)
+                .disambiguate(Disambiguation::Compatible)
+                .map_err(|_| err("error computing timezone offset"))
+        }
+    }
+}
+
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
 /// relative to the provided `timezone`
 ///
@@ -96,80 +170,64 @@ pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 /// [IANA timezones]: https://www.iana.org/time-zones
-pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
-    timezone: &T,
+pub(crate) fn string_to_datetime_formatted(
+    timezone: &TimeZone,
     s: &str,
     format: &str,
-) -> Result<DateTime<T>, DataFusionError> {
+) -> Result<Zoned, DataFusionError> {
     let err = |err_ctx: &str| {
         exec_datafusion_err!(
             "Error parsing timestamp from '{s}' using format '{format}': {err_ctx}"
         )
     };
 
-    let mut datetime_str = s;
-    let mut format = format;
-
-    // we manually handle the most common case of a named timezone at the end of the timestamp
-    // not that %+ handles 'Z' at the end of the string without a space. This code doesn't
-    // handle named timezones with no preceding space since that would require writing a
-    // custom parser (or switching to Jiff)
-    let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {
-        // grab the string after the last space as the named timezone
-        let parts: Vec<&str> = datetime_str.rsplitn(2, ' ').collect();
-        let timezone_name = parts[0];
-        datetime_str = parts[1];
-
-        // attempt to parse the timezone name
-        let result: Result<chrono_tz::Tz, chrono_tz::ParseError> = timezone_name.parse();
-        let Ok(tz) = result else {
-            return Err(err(&result.unwrap_err().to_string()));
-        };
-
-        // successfully parsed the timezone name, remove the ' %Z' from the format
-        format = format.trim_end_matches(" %Z");
-
-        Some(tz)
-    } else if format.contains("%Z") {
-        return Err(err(
-            "'%Z' is only supported at the end of the format string preceded by a space",
-        ));
+    let format = if format.contains("%+") {
+        "%Y-%m-%dT%H:%M:%S%.f%:z"
     } else {
-        None
+        format
     };
 
-    let mut parsed = Parsed::new();
-    parse(&mut parsed, datetime_str, StrftimeItems::new(format))
-        .map_err(|e| err(&e.to_string()))?;
+    if format == "%c" {
+        // switch to chrono, jiff doesn't support parsing with %c
+        let mut parsed = Parsed::new();
+        parse(&mut parsed, s, StrftimeItems::new(format))
+            .map_err(|e| err(&e.to_string()))?;
+        let offset = timezone
+            .to_fixed_offset()
+            .map_err(|e| err(&e.to_string()))?
+            .to_string();
+        let tz = timezone.iana_name().unwrap_or(&offset);
+        let tz: Tz = tz.parse::<Tz>().ok().unwrap_or("UTC".parse::<Tz>()?);
 
-    let dt = match tz {
-        Some(tz) => {
-            // A timezone was manually parsed out, convert it to a fixed offset
-            match parsed.to_datetime_with_timezone(&tz) {
-                Ok(dt) => Ok(dt.fixed_offset()),
-                Err(e) => Err(e),
+        return match parsed.to_datetime_with_timezone(&tz) {
+            Ok(dt) => {
+                let dt = dt.fixed_offset();
+                Ok(Timestamp::from_nanosecond(dt.timestamp() as i128)
+                    .map_err(|e| err(&e.to_string()))?
+                    .to_zoned(timezone.to_owned()))
             }
-        }
-        // default to parse the string assuming it has a timezone
-        None => parsed.to_datetime(),
-    };
+            Err(e) => Err(err(&e.to_string())),
+        };
+    }
 
-    if let Err(e) = &dt {
-        // no timezone or other failure, try without a timezone
-        let ndt = parsed
-            .to_naive_datetime_with_offset(0)
-            .or_else(|_| parsed.to_naive_date().map(|nd| nd.into()));
-        if let Err(e) = &ndt {
-            return Err(err(&e.to_string()));
-        }
+    let result = Zoned::strptime(format, s);
 
-        if let Single(e) = &timezone.from_local_datetime(&ndt.unwrap()) {
-            Ok(e.to_owned())
-        } else {
-            Err(err(&e.to_string()))
+    match result {
+        Ok(z) => Ok(z),
+        Err(_) => {
+            let result = DateTime::strptime(format, s)
+                .map_err(|e| err(&format!("error parsing timestamp: {e:?}")));
+            let datetime = match result {
+                Ok(d) => d,
+                Err(e) => return Err(e),
+            };
+
+            timezone
+                .to_owned()
+                .into_ambiguous_zoned(datetime)
+                .disambiguate(Disambiguation::Compatible)
+                .map_err(|_| err("error computing timezone offset"))
         }
-    } else {
-        Ok(dt.unwrap().with_timezone(timezone))
     }
 }
 
@@ -205,22 +263,27 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
-        .timestamp_nanos_opt()
+    string_to_datetime_formatted(&TimeZone::UTC, s, format)?
+        .timestamp()
+        .as_nanosecond()
+        .to_i64()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
 }
 
 pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: &Option<TimeZone>,
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    let dt =
-        string_to_datetime_formatted(&timezone.unwrap_or("UTC".parse()?), s, format)?;
+    let dt = string_to_datetime_formatted(
+        &timezone.to_owned().unwrap_or(TimeZone::UTC),
+        s,
+        format,
+    )?;
     let parsed = dt
-        .timestamp_nanos_opt()
+        .timestamp()
+        .as_nanosecond()
+        .to_i64()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
 
     Ok(parsed)
@@ -244,10 +307,9 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 #[inline]
 pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
-    Ok(string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
-        .timestamp_millis())
+    Ok(string_to_datetime_formatted(&TimeZone::UTC, s, format)?
+        .timestamp()
+        .as_millisecond())
 }
 
 pub(crate) struct ScalarDataType<T: PrimInt> {

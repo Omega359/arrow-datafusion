@@ -34,7 +34,7 @@ fn data() -> StringArray {
         "1997-01-31T09:26:56.123Z",
         "1997-01-31T09:26:56.123-05:00",
         "1997-01-31 09:26:56.123-05:00",
-        "2023-01-01 04:05:06.789 -08",
+        "2023-01-01 04:05:06.789-08:00",
         "1997-01-31T09:26:56.123",
         "1997-01-31 09:26:56.123",
         "1997-01-31 09:26:56",
@@ -55,22 +55,22 @@ fn data_with_formats() -> (StringArray, StringArray, StringArray, StringArray) {
     inputs.append_value("1997-01-31T09:26:56.123Z");
     format1_builder.append_value("%+");
     format2_builder.append_value("%c");
-    format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%Z");
+    format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%Q");
 
     inputs.append_value("1997-01-31T09:26:56.123-05:00");
     format1_builder.append_value("%+");
     format2_builder.append_value("%c");
-    format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%z");
+    format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%:z");
 
     inputs.append_value("1997-01-31 09:26:56.123-05:00");
     format1_builder.append_value("%+");
     format2_builder.append_value("%c");
-    format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f%Z");
+    format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f%:Q");
 
-    inputs.append_value("2023-01-01 04:05:06.789 -08");
+    inputs.append_value("2023-01-01 04:05:06.789 -0800");
     format1_builder.append_value("%+");
     format2_builder.append_value("%c");
-    format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f %#z");
+    format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f %z");
 
     inputs.append_value("1997-01-31T09:26:56.123");
     format1_builder.append_value("%+");
