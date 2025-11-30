@@ -151,9 +151,7 @@ pub mod chrono {
                 };
 
                 match dt {
-                    Ok(dt) => {
-                        return Ok(dt.with_timezone(timezone));
-                    }
+                    Ok(dt) => return Ok(dt.with_timezone(timezone)),
                     Err(e) if e.kind() == ParseErrorKind::Impossible => {
                         err = Some(format!("Unable to parse timestamp {datetime_str} in timezone {tz:?}: datetime was impossible"));
                         continue;
@@ -201,6 +199,7 @@ pub mod chrono {
     }
 
     impl DateTimeParser for ChronoDateTimeParser {
+
         /// Accepts a string and parses it relative to the provided `timezone`
         ///
         /// In addition to RFC3339 / ISO8601 standard timestamps, it also
@@ -251,7 +250,7 @@ pub mod chrono {
             Ok(parsed)
         }
 
-        /// Accepts a string with a `chrono` format and converts it to a
+        /// Accepts a string with an array of `chrono` formats and converts it to a
         /// nanosecond precision timestamp according to the rules
         /// defined by `chrono`.
         ///
@@ -286,8 +285,8 @@ pub mod chrono {
                 Err(e) => return exec_err!("Invalid timezone '{tz}': {e}"),
             };
 
-            self.string_to_datetime_formatted(&tz, s, formats)?
-                .naive_utc()
+            let dt = self.string_to_datetime_formatted(&tz, s, formats)?;
+            dt.naive_utc()
                 .and_utc()
                 .timestamp_nanos_opt()
                 .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
@@ -337,7 +336,7 @@ pub mod jiff {
     use arrow::error::ArrowError;
     use chrono::format::{parse, Parsed, StrftimeItems};
     use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError};
-    use jiff::civil::{DateTime, Time};
+    use jiff::civil::Time;
     use jiff::fmt::temporal::Pieces;
     use jiff::tz::{Disambiguation, TimeZone};
     use jiff::{Timestamp, Zoned};
@@ -353,27 +352,47 @@ pub mod jiff {
             Self {}
         }
 
+        /// Attempts to parse a given string representation of a timestamp into a `Timestamp` object.
+        /// The function also adjusts the datetime for the specified timezone.
+        ///
+        /// # Parameters
+        /// - `timezone`: A reference to the `TimeZone` object used to adjust the parsed datetime to the desired timezone.
+        /// - `s`: A string slice holding the timestamp to be parsed.
+        ///
+        /// # Returns
+        /// - `Ok(Timestamp)`: Contains the parsed timestamp in seconds since the Unix epoch.
+        /// - `Err(ArrowError)`: Returned in the event of errors in parsing
+        ///   the timestamp string or computing the timezone offset.
+        ///
+        /// # Errors
+        /// This function will return an `ArrowError` if:
+        ///
+        /// - The string `s` is shorter than 10 characters.
+        /// - The format of the string does not match expected timestamp patterns.
+        /// - An invalid/unknown time zone or offset is provided during parsing.
+        /// - Errors occur while converting the datetime to a specific time zone.
         fn string_to_datetime(
             &self,
             timezone: &TimeZone,
             s: &str,
-        ) -> datafusion_common::Result<Zoned, ArrowError> {
+        ) -> datafusion_common::Result<Timestamp, ArrowError> {
             let err = |ctx: &str| {
                 ArrowError::ParseError(format!(
                     "Error parsing timestamp from '{s}': {ctx}"
                 ))
             };
 
-            if s.len() < 10 {
+            let bytes = s.as_bytes();
+            if bytes.len() < 10 {
                 return Err(err("timestamp must contain at least 10 characters"));
             }
 
-            let pieces = Pieces::parse(s).map_err(|_| err("error parsing timestamp"))?;
+            let pieces = Pieces::parse(bytes).map_err(|e| err(&format!("{e:?}")))?;
             let time = pieces.time().unwrap_or_else(Time::midnight);
             let dt = pieces.date().to_datetime(time);
             let tz = match pieces
                 .to_time_zone()
-                .map_err(|_| err("error parsing timestamp"))?
+                .map_err(|e| err(&format!("unknown time zone: {e:?}")))?
             {
                 Some(tz) => tz,
                 None => match pieces.to_numeric_offset() {
@@ -383,11 +402,38 @@ pub mod jiff {
             };
             let zdt = tz
                 .to_zoned(dt)
-                .map_err(|_| err("error computing timezone offset"))?;
+                .map_err(|e| err(&format!("error computing timezone offset: {e:?}")))?;
 
-            Ok(zdt.with_time_zone(timezone.to_owned()))
+            Ok(zdt.timestamp())
         }
 
+        /// Attempts to parse a given string representation of a timestamp into a `Zoned` datetime object
+        /// using a list of provided formats. The function also adjusts the datetime for the specified timezone.
+        ///
+        /// # Parameters
+        /// - `timezone`: A reference to the `TimeZone` object used to adjust the parsed datetime to the desired timezone.
+        /// - `s`: A string slice holding the timestamp to be parsed.
+        /// - `formats`: A slice of string slices representing the accepted datetime formats to use when parsing.
+        ///
+        /// # Returns
+        /// - `Ok(Zoned)` if the string is successfully parsed into a `Zoned` datetime object using one of the formats provided.
+        /// - `Err(DataFusionError)` if the string cannot be parsed or if there are issues related to the timezone or format handling.
+        ///
+        /// # Behavior
+        /// 1. Iterates through the list of provided formats.
+        /// 2. Handles special cases such as `%Z` (timezone) or `%c` (locale-aware datetime representation)
+        ///    by either modifying the format string or switching to different parsing logic.
+        /// 3. Attempts to resolve timezone-related issues:
+        ///     - Calculates a fixed offset for the given `timezone`.
+        ///     - Handles attempts to parse timezones using IANA names or offsets.
+        /// 4. If parsing fails for the current format, the function moves to the next format and aggregates any parsing errors.
+        /// 5. If no formats succeed, an error is returned summarizing the failure.
+        ///
+        /// # Errors
+        /// - Returns a descriptive error wrapped in `DataFusionError` if:
+        ///   - The input string is not compatible with any of the provided formats.
+        ///   - There are issues parsing the timezone from the input string or adjusting to the provided `TimeZone`.
+        ///   - There are issues resolving ambiguous datetime representations.
         fn string_to_datetime_formatted(
             &self,
             timezone: &TimeZone,
@@ -397,9 +443,7 @@ pub mod jiff {
             let mut err: Option<String> = None;
 
             for &format in formats.iter() {
-                let format = if format.contains("%+") {
-                    "%Y-%m-%dT%H:%M:%S%.f%:z"
-                } else if format.contains("%Z") {
+                let mut format = if format.contains("%Z") {
                     &format.replace("%Z", "%Q")
                 } else {
                     format
@@ -453,11 +497,39 @@ pub mod jiff {
                     };
                 }
 
-                let result = Zoned::strptime(format, s);
+                let result = if format == "%+" {
+                    // jiff doesn't support parsing with %+, but the equivalent of %+ is
+                    // somewhat rfc3389 which is what is used by the parse method
+                    let result: Result<Zoned, _> = s.parse();
+
+                    if let Ok(r) = result {
+                        return Ok(r);
+                    } else {
+                        // however, the above only works with timezone names, not offsets
+                        let s = if s.ends_with("Z") {
+                            &(s.trim_end_matches("Z").to_owned() + "+00:00")
+                        } else {
+                            s
+                        };
+
+                        // try again with fractional seconds
+                        format = "%Y-%m-%dT%H:%M:%S%.f%:z";
+
+                        jiff::fmt::strtime::parse(format, s)
+                    }
+                } else {
+                    jiff::fmt::strtime::parse(format, s)
+                };
+
                 match result {
-                    Ok(z) => return Ok(z),
-                    Err(_) => {
-                        let result = DateTime::strptime(format, s);
+                    Ok(bdt) => {
+                        if bdt.iana_time_zone().is_some() || bdt.offset().is_some() {
+                            if let Ok(zoned) = bdt.to_zoned() {
+                                return Ok(zoned.with_time_zone(timezone.to_owned()));
+                            }
+                        }
+
+                        let result = bdt.to_datetime();
                         let datetime = match result {
                             Ok(datetime) => datetime,
                             Err(e) => {
@@ -479,6 +551,10 @@ pub mod jiff {
                             }
                         }
                     }
+                    Err(e) => {
+                        err = Some(e.to_string());
+                        continue;
+                    }
                 }
             }
 
@@ -492,6 +568,23 @@ pub mod jiff {
     }
 
     impl DateTimeParser for JiffDateTimeParser {
+        /// Accepts a string with a `jiff` format and converts it to a
+        /// nanosecond precision timestamp according to the rules
+        /// defined by `jiff`.
+        ///
+        /// See <https://docs.rs/jiff/latest/jiff/fmt/strtime/index.html#conversion-specifications>
+        /// for the full set of supported formats.
+        ///
+        /// ## Timestamp Precision
+        ///
+        /// This function uses the maximum precision timestamps supported by
+        /// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
+        /// means the range of dates that timestamps can represent is ~1677 AD
+        /// to 2262 AM.
+        ///
+        /// ## Timezone / Offset Handling
+        ///
+        /// Numerical values of timestamps are stored compared to offset UTC.
         #[inline]
         fn string_to_timestamp_nanos(
             &self,
@@ -504,15 +597,32 @@ pub mod jiff {
                 Err(e) => return exec_err!("Invalid timezone {tz}: {e}"),
             };
 
-            let dt = self.string_to_datetime(&timezone, s)?;
-            let parsed =
-                dt.timestamp().as_nanosecond().to_i64().ok_or_else(|| {
-                    exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}")
-                })?;
+            let timestamp = self.string_to_datetime(&timezone, s)?;
+            let parsed = timestamp
+                .as_nanosecond()
+                .to_i64()
+                .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
 
             Ok(parsed)
         }
 
+        /// Accepts a string with an array of `jiff` formats and converts it to a
+        /// nanosecond precision timestamp according to the rules
+        /// defined by `jiff`.
+        ///
+        /// See <https://docs.rs/jiff/latest/jiff/fmt/strtime/index.html#conversion-specifications>
+        /// for the full set of supported formats.
+        ///
+        /// ## Timestamp Precision
+        ///
+        /// This function uses the maximum precision timestamps supported by
+        /// Arrow (nanoseconds stored as a 64-bit integer) timestamps. This
+        /// means the range of dates that timestamps can represent is ~1677 AD
+        /// to 2262 AM.
+        ///
+        /// ## Timezone / Offset Handling
+        ///
+        /// Numerical values of timestamps are stored compared to offset UTC.
         #[inline]
         fn string_to_timestamp_nanos_formatted(
             &self,
@@ -526,15 +636,25 @@ pub mod jiff {
                 Err(e) => return exec_err!("Invalid timezone {tz}: {e}"),
             };
 
-            let dt = self.string_to_datetime_formatted(&timezone, s, formats)?;
+            let zoned = self.string_to_datetime_formatted(&timezone, s, formats)?;
             let parsed =
-                dt.timestamp().as_nanosecond().to_i64().ok_or_else(|| {
+                zoned.timestamp().as_nanosecond().to_i64().ok_or_else(|| {
                     exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}")
                 })?;
 
             Ok(parsed)
         }
 
+        /// Accepts a string with an array of `jiff` formats and converts it to a
+        /// millisecond precision timestamp according to the rules
+        /// defined by `jiff`.
+        ///
+        /// See <https://docs.rs/jiff/latest/jiff/fmt/strtime/index.html#conversion-specifications>
+        /// for the full set of supported formats.
+        ///
+        /// ## Timezone / Offset Handling
+        ///
+        /// Numerical values of timestamps are stored compared to offset UTC.
         #[inline]
         fn string_to_timestamp_millis_formatted(
             &self,

@@ -115,7 +115,7 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "to_timestamp"
-required-features = ["datetime_expressions"]
+required-features = ["datetime_expressions", "jiff"]
 
 [[bench]]
 harness = false
