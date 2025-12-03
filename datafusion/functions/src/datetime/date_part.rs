@@ -22,23 +22,21 @@ use std::sync::Arc;
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{DatePart, binary, date_part};
+use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-
 use arrow::datatypes::{
     ArrowTimestampType, DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::types::{NativeType, logical_date};
+use datafusion_common::types::{logical_date, NativeType};
 
 use super::adjust_to_local_time;
 use datafusion_common::{
-    Result, ScalarValue,
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
         as_interval_mdn_array, as_interval_ym_array, as_time32_millisecond_array,
@@ -49,6 +47,7 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
+    Result, ScalarValue,
 };
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
@@ -134,7 +133,7 @@ impl DatePartFunc {
                         Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
-                Volatility::Immutable,
+                Volatility::Stable,
             ),
             aliases: vec![String::from("datepart"), String::from("extract")],
         }
@@ -196,8 +195,8 @@ impl ScalarUDFImpl for DatePartFunc {
             v
         } else {
             return exec_err!(
-"First argument of `DATE_PART` must be non-null scalar Utf8"
-);
+                "First argument of `DATE_PART` must be non-null scalar Utf8"
+            );
         };
 
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
@@ -277,7 +276,7 @@ impl ScalarUDFImpl for DatePartFunc {
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
         let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
-            match interval_unit {
+            let extracted = match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
                 IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
@@ -288,9 +287,10 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
                 IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
-                // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
-            }
+            };
+
+            extracted
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
@@ -404,57 +404,9 @@ fn adjust_timestamp_array<T: ArrowTimestampType>(
 }
 
 fn is_epoch(part: &str) -> bool {
-    let part = part_normalization(part);
     matches!(part.to_lowercase().as_str(), "epoch")
 }
 
-fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    Some(match target_type {
-        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
-        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
-
-        Timestamp(unit, tz_opt) => {
-            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-
-            let utc_dt = if let Some(tz_str) = tz_opt {
-                let tz: Tz = tz_str.parse().ok()?;
-
-                let local = tz.from_local_datetime(&naive_midnight);
-
-                let local_dt = match local {
-                    chrono::offset::LocalResult::Single(dt) => dt,
-                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
-                    chrono::offset::LocalResult::None => local.earliest()?,
-                };
-
-                local_dt.with_timezone(&Utc)
-            } else {
-                Utc.from_utc_datetime(&naive_midnight)
-            };
-
-            match unit {
-                Second => {
-                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
-                }
-                Millisecond => ScalarValue::TimestampMillisecond(
-                    Some(utc_dt.timestamp_millis()),
-                    tz_opt.clone(),
-                ),
-                Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(utc_dt.timestamp_micros()),
-                    tz_opt.clone(),
-                ),
-                Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(utc_dt.timestamp_nanos_opt()?),
-                    tz_opt.clone(),
-                ),
-            }
-        }
-        _ => return None,
-    })
-}
-
-// Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
 // Try to remove quote if exist, if the quote is invalid, return original string
 // and let the downstream function handle the error.
 fn part_normalization(part: &str) -> &str {
@@ -463,9 +415,6 @@ fn part_normalization(part: &str) -> &str {
         .unwrap_or(part)
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
 fn interpret_session_timezone(tz_str: &str) -> Result<Tz> {
     match tz_str.parse::<Tz>() {
         Ok(tz) => Ok(tz),
@@ -495,7 +444,6 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     };
 
     let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
@@ -533,7 +481,6 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
         Nanosecond => 1_000_000_000_f64,
     };
     let secs = date_part(array, DatePart::Second)?;
-    // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
