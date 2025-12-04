@@ -832,7 +832,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
     }
 }
 
-#[allow(clippy::borrowed_box)]
+#[expect(clippy::borrowed_box)]
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,

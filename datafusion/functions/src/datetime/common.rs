@@ -26,8 +26,7 @@ use arrow::datatypes::{DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, unwrap_or_internal_err, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_datafusion_err, unwrap_or_internal_err, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use num_traits::{PrimInt, ToPrimitive};

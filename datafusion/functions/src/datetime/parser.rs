@@ -72,7 +72,7 @@ pub mod chrono {
     use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError};
 
     const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
-    #[derive(Debug, PartialEq, Eq, Hash)]
+    #[derive(Debug, Default, PartialEq, Eq, Hash)]
     pub struct ChronoDateTimeParser {}
 
     impl ChronoDateTimeParser {
@@ -199,7 +199,6 @@ pub mod chrono {
     }
 
     impl DateTimeParser for ChronoDateTimeParser {
-
         /// Accepts a string and parses it relative to the provided `timezone`
         ///
         /// In addition to RFC3339 / ISO8601 standard timestamps, it also
