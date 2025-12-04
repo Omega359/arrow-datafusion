@@ -22,6 +22,7 @@ use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{Date32Type, Int32Type};
 use arrow::array::PrimitiveArray;
+use arrow::compute::CastOptions;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
 use chrono::prelude::*;
@@ -69,6 +70,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeDateFunc {
     signature: Signature,
+    /// how to handle cast or parsing failures, either return NULL (safe=true) or return ERR (safe=false)
+    safe: bool,
 }
 
 impl Default for MakeDateFunc {
@@ -79,12 +82,17 @@ impl Default for MakeDateFunc {
 
 impl MakeDateFunc {
     pub fn new() -> Self {
+        Self::new_with_safe(false)
+    }
+
+    pub fn new_with_safe(safe: bool) -> Self {
         Self {
             signature: Signature::uniform(
                 3,
                 vec![Int32, Int64, UInt32, UInt64, Utf8, Utf8View],
                 Volatility::Immutable,
             ),
+            safe,
         }
     }
 }
@@ -129,16 +137,32 @@ impl ScalarUDFImpl for MakeDateFunc {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
 
-        let years = years.cast_to(&Int32, None)?;
-        let months = months.cast_to(&Int32, None)?;
-        let days = days.cast_to(&Int32, None)?;
+        let years = match self.safe {
+            true => years.cast_to(&Int32, Some(&CastOptions::default()))?,
+            false => years.cast_to(&Int32, None)?,
+        };
+        let months = match self.safe {
+            true => months.cast_to(&Int32, Some(&CastOptions::default()))?,
+            false => months.cast_to(&Int32, None)?,
+        };
+        let days = match self.safe {
+            true => days.cast_to(&Int32, Some(&CastOptions::default()))?,
+            false => days.cast_to(&Int32, None)?,
+        };
 
         let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
             let ColumnarValue::Scalar(s) = col else {
                 return exec_err!("Expected scalar value");
             };
-            let ScalarValue::Int32(Some(i)) = s else {
-                return exec_err!("Unable to parse date from null/empty value");
+            let i = match s {
+                ScalarValue::Int32(Some(i)) => i,
+                _ => {
+                    if !self.safe {
+                        return exec_err!("Unable to parse date from null/empty value");
+                    } else {
+                        &-1
+                    }
+                }
             };
             Ok(*i)
         };
@@ -164,12 +188,18 @@ impl ScalarUDFImpl for MakeDateFunc {
             let mut builder: PrimitiveBuilder<Date32Type> =
                 PrimitiveArray::builder(array_size);
             for i in 0..array_size {
-                make_date_inner(
+                let res = make_date_inner(
                     years.value(i),
                     months.value(i),
                     days.value(i),
                     |days: i32| builder.append_value(days),
-                )?;
+                );
+
+                if self.safe && res.is_err() {
+                    builder.append_null();
+                }
+
+                res?;
             }
 
             let arr = builder.finish();
@@ -179,18 +209,28 @@ impl ScalarUDFImpl for MakeDateFunc {
             // For scalar only columns the operation is faster without using the PrimitiveArray.
             // Also, keep the output as scalar since all inputs are scalar.
             let mut value = 0;
-            make_date_inner(
+            let res = make_date_inner(
                 scalar_value_fn(&years)?,
                 scalar_value_fn(&months)?,
                 scalar_value_fn(&days)?,
                 |days: i32| value = days,
-            )?;
+            );
 
-            ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
+            if self.safe {
+                if res.is_err() {
+                    ColumnarValue::Scalar(ScalarValue::Null)
+                } else {
+                    ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
+                }
+            } else {
+                res?;
+                ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
+            }
         };
 
         Ok(value)
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -239,6 +279,7 @@ mod tests {
     fn invoke_make_date_with_args(
         args: Vec<ColumnarValue>,
         number_rows: usize,
+        safe: bool,
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
@@ -251,7 +292,7 @@ mod tests {
             return_field: Field::new("f", DataType::Date32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        MakeDateFunc::new().invoke_with_args(args)
+        MakeDateFunc::new_with_safe(safe).invoke_with_args(args)
     }
 
     #[test]
@@ -263,6 +304,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -279,6 +321,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -295,6 +338,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
             ],
             1,
+            false,
         )
         .expect("that make_date parsed values without error");
 
@@ -315,6 +359,7 @@ mod tests {
                 ColumnarValue::Array(days),
             ],
             batch_len,
+            false,
         )
         .unwrap();
 
@@ -338,6 +383,7 @@ mod tests {
         let res = invoke_make_date_with_args(
             vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -352,6 +398,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -366,25 +413,99 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int32"
         );
 
+        // should not error when using safe mode
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ],
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Null) = res {
+            // this is what we expect
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        // should not error when using safe mode
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(999))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ],
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
+        if let ColumnarValue::Scalar(ScalarValue::Null) = res {
+            // this is what we expect
+        } else {
+            panic!("Expected a scalar value")
+        }
+
         // overflow of day
         let res = invoke_make_date_with_args(
             vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(12))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
             ],
             1,
+            false,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
         );
+
+        // should not error when using safe mode
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(12))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
+            ],
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
+        if let ColumnarValue::Scalar(ScalarValue::Null) = res {
+            // this is what we expect
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        // should not error when using safe mode
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(12))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(341))),
+            ],
+            1,
+            true,
+        )
+        .expect("that make_date parsed values without error in safe mode");
+
+        if let ColumnarValue::Scalar(ScalarValue::Null) = res {
+            // this is what we expect
+        } else {
+            panic!("Expected a scalar value")
+        }
     }
 
     #[test]
@@ -396,6 +517,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
             1,
+            true,
         )
         .expect("that make_date parsed values without error");
 
