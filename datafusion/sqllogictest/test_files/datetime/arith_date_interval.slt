@@ -1,37 +1,148 @@
-# postgresql behavior
-#
 # date + interval → timestamp
 # Add an interval to a date
 # date '2001-09-28' + interval '1 hour' → 2001-09-28 01:00:00
-#
-# note that while the above reflects what postgresql does
-# in the case of datafusion/arrow that is not the case. The
-# result will be date32/date64
-#
-# Tracking issue: https://github.com/apache/datafusion/issues/19527
 
-query D
+query P
 SELECT '2001-09-28'::date + interval '1 hour'
 ----
-2001-09-28
+2001-09-28T01:00:00
 
 query T
 SELECT arrow_typeof('2001-09-28'::date + interval '1 hour')
 ----
-Date32
+Timestamp(ns)
 
-# postgresql behavior
-#
-# date - interval → timestamp
-# Subtract an interval from a date
-# date '2001-09-28' - interval '1 hour' → 2001-09-27 23:00:00
-
-query D
+query P
 SELECT '2001-09-28'::date - interval '25 hour'
 ----
-2001-09-27
+2001-09-26T23:00:00
 
 query T
 SELECT arrow_typeof('2001-09-28'::date - interval '25 hour')
 ----
-Date32
+Timestamp(ns)
+
+# add_interval_month
+query P
+select date '1994-01-31' + interval '1' month as date;
+----
+1994-02-28T00:00:00
+
+# sub_interval_month
+query P
+select date '1994-03-31' - interval '1' month as date;
+----
+1994-02-28T00:00:00
+
+# sub_month_wrap
+query P
+select date '1994-01-15' - interval '1' month as date;
+----
+1993-12-15T00:00:00
+
+# add_interval_day
+query P
+select date '1994-01-15' + interval '1' day as date;
+----
+1994-01-16T00:00:00
+
+# sub_interval_day
+query P
+select date '1994-01-01' - interval '1' day as date;
+----
+1993-12-31T00:00:00
+
+# Interval string literal + date
+query P
+select interval 1 month + interval 1 day + '2012-01-01'::date;
+----
+2012-02-02T00:00:00
+
+# Interval nested string literal subtraction + date
+query P
+select interval 1 year - interval 1 month + interval 1 day + '2012-01-01'::date
+----
+2012-12-02T00:00:00
+
+statement ok
+create table t(i interval, d date, ts timestamp)
+as
+values
+  ('1 month',  '1980-01-01', '2000-01-01T00:00:00'),
+  ('1 day',    '1990-10-01', '2000-01-01T12:11:10'),
+  ('1 minute', '1980-01-02', '2000-02-01T00:00:00')
+;
+
+query P
+select d + interval '1 day' from t;
+----
+1980-01-02T00:00:00
+1990-10-02T00:00:00
+1980-01-03T00:00:00
+
+query P
+select d - interval '1 day' from t;
+----
+1979-12-31T00:00:00
+1990-09-30T00:00:00
+1980-01-01T00:00:00
+
+query P
+select '1980-01-01'::date + i from t;
+----
+1980-02-01T00:00:00
+1980-01-02T00:00:00
+1980-01-01T00:01:00
+
+query P
+select '1980-01-01'::date - i from t;
+----
+1979-12-01T00:00:00
+1979-12-31T00:00:00
+1979-12-31T23:59:00
+
+query P
+select d + i from t;
+----
+1980-02-01T00:00:00
+1990-10-02T00:00:00
+1980-01-02T00:01:00
+
+query P
+select d - i from t;
+----
+1979-12-01T00:00:00
+1990-09-30T00:00:00
+1980-01-01T23:59:00
+
+query P
+select '1 month'::interval + '1980-01-01'::date;
+----
+1980-02-01T00:00:00
+
+query P
+select '1 month'::interval + d from t;
+----
+1980-02-01T00:00:00
+1990-11-01T00:00:00
+1980-02-02T00:00:00
+
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Interval\(MonthDayNano\) \- Date32: Invalid argument error: Invalid arithmetic operation: Interval\(MonthDayNano\) \- Timestamp\(ns\)
+select '1 month'::interval - '1980-01-01'::date;
+
+# expected error interval (scalar) - date (array)
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Interval\(MonthDayNano\) \- Date32: Invalid argument error: Invalid arithmetic operation: Interval\(MonthDayNano\) \- Timestamp\(ns\)
+select '1 month'::interval - d from t;
+
+query P
+select i + d from t;
+----
+1980-02-01T00:00:00
+1990-10-02T00:00:00
+1980-01-02T00:01:00
+
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Interval\(MonthDayNano\) \- Date32: Invalid argument error: Invalid arithmetic operation: Interval\(MonthDayNano\) \- Timestamp\(ns\)
+select i - d from t;
+
+statement ok
+drop table t;

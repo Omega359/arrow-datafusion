@@ -425,6 +425,13 @@ impl<'a> TypeCoercionRewriter<'a> {
                 // finally cast to interval
                 cast(expr, Interval(IntervalUnit::MonthDayNano))
             }
+            // Date +/- interval -> timestamp
+            (
+                Operator::Plus | Operator::Minus,
+                Date32 | Date64,
+                Timestamp(TimeUnit::Nanosecond, None),
+                Interval(_),
+            ) => cast(expr, Timestamp(TimeUnit::Nanosecond, None)),
             _ => {
                 return plan_err!(
                     "Cannot automatically convert {left_current_type} to {left_target_type}"

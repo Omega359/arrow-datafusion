@@ -224,23 +224,12 @@ select -interval '1 year' - interval '1 month' - interval '1 day' - interval '1 
 ----
 -13 mons -1 days -1 hours -1 mins -1.001001001 secs
 
-# Interval string literal + date
-query D
-select interval 1 month + interval 1 day + '2012-01-01'::date;
-----
-2012-02-02
 
 # Interval nested string literal + date
-query D
+query P
 select interval 1 year +  interval 1 month + interval 1 day + '2012-01-01'::date
 ----
-2013-02-02
-
-# Interval nested string literal subtraction + date
-query D
-select interval 1 year - interval 1 month + interval 1 day + '2012-01-01'::date
-----
-2012-12-02
+2013-02-02T00:00:00
 
 # Use interval SQL type
 query TT
@@ -311,25 +300,13 @@ values
   ('1 minute', '1980-01-02', '2000-02-01T00:00:00')
 ;
 
-### date / timestamp (scalar) + interval (scalar)
-query D
-select '1980-01-01'::date + interval '1 day'
-----
-1980-01-02
-
-
 query P
 select '1980-01-01'::timestamp + interval '1 day'
 ----
 1980-01-02T00:00:00
 
 
-### date / timestamp (scalar) - interval (scalar)
-query D
-select '1980-01-01'::date - interval '1 day'
-----
-1979-12-31
-
+###  timestamp (scalar) - interval (scalar)
 
 query P
 select '1980-01-01'::timestamp - interval '1 day'
@@ -337,13 +314,7 @@ select '1980-01-01'::timestamp - interval '1 day'
 1979-12-31T00:00:00
 
 
-### date / timestamp (array) + interval (scalar)
-query D
-select d + interval '1 day' from t;
-----
-1980-01-02
-1990-10-02
-1980-01-03
+### timestamp (array) + interval (scalar)
 
 query P
 select ts + interval '1 day' from t;
@@ -352,13 +323,7 @@ select ts + interval '1 day' from t;
 2000-01-02T12:11:10
 2000-02-02T00:00:00
 
-### date / timestamp (array) - interval (scalar)
-query D
-select d - interval '1 day' from t;
-----
-1979-12-31
-1990-09-30
-1980-01-01
+###  timestamp (array) - interval (scalar)
 
 query P
 select ts - interval '1 day' from t;
@@ -367,13 +332,7 @@ select ts - interval '1 day' from t;
 1999-12-31T12:11:10
 2000-01-31T00:00:00
 
-### date / timestamp (scalar) + interval (array)
-query D
-select '1980-01-01'::date + i from t;
-----
-1980-02-01
-1980-01-02
-1980-01-01
+###  timestamp (scalar) + interval (array)
 
 query P
 select '1980-01-01T12:00:00'::timestamp + i from t;
@@ -382,14 +341,6 @@ select '1980-01-01T12:00:00'::timestamp + i from t;
 1980-01-02T12:00:00
 1980-01-01T12:01:00
 
-
-query D
-select '1980-01-01'::date - i from t;
-----
-1979-12-01
-1979-12-31
-1980-01-01
-
 query P
 select '1980-01-01T12:00:00'::timestamp - i from t;
 ----
@@ -397,13 +348,7 @@ select '1980-01-01T12:00:00'::timestamp - i from t;
 1979-12-31T12:00:00
 1980-01-01T11:59:00
 
-### date / timestamp (array) + interval (array)
-query D
-select d + i from t;
-----
-1980-02-01
-1990-10-02
-1980-01-02
+### timestamp (array) + interval (array)
 
 query P
 select ts + i from t;
@@ -412,14 +357,7 @@ select ts + i from t;
 2000-01-02T12:11:10
 2000-02-01T00:01:00
 
-
-### date / timestamp (array) - interval (array)
-query D
-select d - i from t;
-----
-1979-12-01
-1990-09-30
-1980-01-02
+### timestamp (array) - interval (array)
 
 query P
 select ts - i from t;
@@ -430,30 +368,18 @@ select ts - i from t;
 
 
 # Now reverse the argument order
-# interval (scalar) + date / timestamp (scalar)
-query D
-select '1 month'::interval + '1980-01-01'::date;
-----
-1980-02-01
+# interval (scalar) +  timestamp (scalar)
 
 query P
 select '1 month'::interval + '1980-01-01T12:00:00'::timestamp;
 ----
 1980-02-01T12:00:00
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
-select '1 month'::interval - '1980-01-01'::date;
 
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
 select '1 month'::interval - '1980-01-01T12:00:00'::timestamp;
 
-# interval (array) + date / timestamp (array)
-query D
-select i + d from t;
-----
-1980-02-01
-1990-10-02
-1980-01-02
+# interval (array) + timestamp (array)
 
 query P
 select i + ts from t;
@@ -462,9 +388,7 @@ select i + ts from t;
 2000-01-02T12:11:10
 2000-02-01T00:01:00
 
-# expected error interval (array) - date / timestamp (array)
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
-select i - d from t;
+# expected error interval (array) - timestamp (array)
 
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
 select i - ts from t;
@@ -496,12 +420,6 @@ select interval '1 y' + interval '1 year'
 24 mons
 
 # interval (scalar) + date / timestamp (array)
-query D
-select '1 month'::interval + d from t;
-----
-1980-02-01
-1990-11-01
-1980-02-02
 
 query P
 select '1 month'::interval + ts from t;
@@ -526,18 +444,10 @@ select interval '5 day 0' hour
 query error DataFusion error: Arrow error: Parser error: Invalid input syntax for type interval: "5 day HOUR"
 SELECT interval '5 day' hour
 
-# expected error interval (scalar) - date / timestamp (array)
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
-select '1 month'::interval - d from t;
+# expected error interval (scalar) - timestamp (array)
 
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
 select '1 month'::interval - ts from t;
-
-# interval + date
-query D
-select interval '1 month' + '2012-01-01'::date;
-----
-2012-02-01
 
 # is (not) distinct from
 query BBBBBB

@@ -267,9 +267,26 @@ impl<'a> BinaryTypeCoercer<'a> {
                 ret: Int64,
             });
         }
-        Plus | Minus | Multiply | Divide | Modulo  =>  {
+            Plus | Minus if is_date_with_interval(lhs, rhs) => {
+                if let Some((lhs, rhs)) = temporal_math_coercion(lhs, rhs) {
+                    let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                        plan_datafusion_err!(
+                    "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                )
+                    })?;
+                    Ok(Signature {
+                        lhs,
+                        rhs,
+                        ret,
+                    })
+                } else {
+                    return Err(plan_datafusion_err!(
+                    "Cannot get result type for temporal operation {} {} {}", self.lhs, self.op, self.rhs
+                ));
+                }
+            }
+            Plus | Minus | Multiply | Divide | Modulo => {
             if let Ok(ret) = self.get_result(lhs, rhs) {
-
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
@@ -366,6 +383,18 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
     matches!(
         (lhs, rhs),
         (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
+    )
+}
+
+/// Returns true is lhs is date and rhs is interval
+/// Used to detect Date +/- Integer operations which should return Timestamp
+fn is_date_with_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Date32, DataType::Interval(_))
+            | (DataType::Interval(_), DataType::Date32)
+            | (DataType::Date64, DataType::Interval(_))
+            | (DataType::Interval(_), DataType::Date64)
     )
 }
 
@@ -1865,6 +1894,13 @@ fn temporal_math_coercion(
 
         (Date64, Time64(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
         (Time64(_), Date64) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        // Coerce Date + Interval -> timestamp + Interval
+        (Date32, Interval(iu)) => Some((Timestamp(Nanosecond, None), Interval(*iu))),
+        (Interval(iu), Date32) => Some((Interval(*iu), Timestamp(Nanosecond, None))),
+
+        (Date64, Interval(iu)) => Some((Timestamp(Nanosecond, None), Interval(*iu))),
+        (Interval(iu), Date64) => Some((Interval(*iu), Timestamp(Nanosecond, None))),
 
         // Coerce Duration to match Timestamp's unit,
         // e.g. Timestamp(ms) + Duration(s) → Timestamp(ms) + Duration(ms)

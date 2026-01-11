@@ -654,38 +654,6 @@ SELECT COUNT(DISTINCT(ts)) FROM ts_data_nanos
 ----
 3
 
-# add_interval_month
-query D
-select date '1994-01-31' + interval '1' month as date;
-----
-1994-02-28
-
-
-# sub_interval_month
-query D
-select date '1994-03-31' - interval '1' month as date;
-----
-1994-02-28
-
-
-# sub_month_wrap
-query D
-select date '1994-01-15' - interval '1' month as date;
-----
-1993-12-15
-
-# add_interval_day
-query D
-select date '1994-01-15' + interval '1' day as date;
-----
-1994-01-16
-
-# sub_interval_day
-query D
-select date '1994-01-01' - interval '1' day as date;
-----
-1993-12-31
-
 # cast_string_to_time()
 query DDDD
 select
