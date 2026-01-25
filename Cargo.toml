@@ -271,3 +271,7 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[profile.samply]
+inherits = "release"
+debug = true

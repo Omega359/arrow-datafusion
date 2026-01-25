@@ -20,7 +20,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use log::debug;
+use log::{debug, info};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -149,11 +149,15 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
+            let start = Instant::now();
+
             new_plan = rule
                 .analyze(new_plan, config)
                 .map_err(|e| e.context(rule.name()))?;
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
+
+            info!("Analyzer::execute_and_check rule {} took {:?}ms", rule.name(), start.elapsed().as_millis());
         }
 
         // verify at the end, after the last LP analyzer pass, that the plan is executable.

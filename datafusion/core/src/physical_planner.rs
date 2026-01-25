@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-
+use std::time::Instant;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -108,7 +108,7 @@ use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{Itertools, multiunzip};
-use log::debug;
+use log::{debug, info};
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -196,11 +196,19 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         {
             return Ok(plan);
         }
+
+        let start = Instant::now();
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
 
-        self.optimize_physical_plan(plan, session_state, |_, _| {})
+        info!("Creating initial physical plan took {:?}", start.elapsed());
+
+        let res = self.optimize_physical_plan(plan, session_state, |_, _| {});
+
+        info!("Optimize physical plan took {:?}", start.elapsed());
+
+        res
     }
 
     /// Create a physical expression from a logical expression
@@ -2472,6 +2480,7 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
+            let start = Instant::now();
             let before_schema = new_plan.schema();
             new_plan = optimizer
                 .optimize(new_plan, session_state.config_options())
@@ -2488,6 +2497,9 @@ impl DefaultPhysicalPlanner {
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
             );
+
+            info!("Physical plan optimizer {} took {:?}ms", optimizer.name(), start.elapsed().as_millis());
+
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
 

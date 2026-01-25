@@ -31,7 +31,7 @@ use std::hint::black_box;
 use std::ops::Rem;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-
+use datafusion_execution::config::SessionConfig;
 // This benchmark suite is designed to test the performance of
 // logical planning with a large plan containing unions, many columns
 // with a variety of operations in it.
@@ -213,7 +213,14 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let ctx = SessionContext::new();
+    env_logger::builder().is_test(true).try_init().unwrap();
+
+    let mut session_config = SessionConfig::new();
+    // session_config.options_mut().optimizer.top_down_join_key_reordering = true;
+    // session_config.options_mut().optimizer.enable_dynamic_filter_pushdown = false;
+
+
+    let ctx = SessionContext::new_with_config(session_config);
     let rt = Runtime::new().unwrap();
 
     // validate logical plan optimize performance
@@ -224,7 +231,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
-            black_box(rt.block_on(async { df_clone.into_optimized_plan().unwrap() }));
+            black_box(rt.block_on(async { let _ = df_clone.create_physical_plan().await; }));
         })
     });
 }

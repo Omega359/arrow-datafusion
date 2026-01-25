@@ -23,7 +23,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{InvariantLevel, assert_expected_schema};
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
@@ -31,7 +31,6 @@ use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
-
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -343,6 +342,8 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                let start = Instant::now();
+
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -417,6 +418,12 @@ impl Optimizer {
                         )));
                     }
                 }
+
+                let elapsed = start.elapsed().as_millis();
+
+                if elapsed > 50 {
+                    info!("Optimization (round {}) for rule {} took > 50ms: {:?}ms", i, rule.name(), elapsed);
+                }
             }
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
@@ -429,6 +436,8 @@ impl Optimizer {
                 break;
             }
             i += 1;
+
+            info!("=============================");
         }
 
         // verify that the optimizer passes only mutated what was permitted.
