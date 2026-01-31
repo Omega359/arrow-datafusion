@@ -23,9 +23,7 @@ use arrow::array::{
     StringArrayType, StringViewArray,
 };
 use arrow::compute::DecimalCast;
-use arrow::compute::kernels::cast_utils::{
-    string_to_datetime, string_to_timestamp_nanos,
-};
+use arrow::compute::kernels::cast_utils::string_to_datetime;
 use arrow::datatypes::{ArrowTimestampType, DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
@@ -63,7 +61,9 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
     let date_time = match T::UNIT {
         TimeUnit::Nanosecond => Utc.timestamp_nanos(ts),
         TimeUnit::Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
-        TimeUnit::Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
+        TimeUnit::Millisecond => {
+            convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?
+        }
         TimeUnit::Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
     };
 
@@ -99,11 +99,6 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
         TimeUnit::Millisecond => Ok(adjusted_date_time.timestamp_millis()),
         TimeUnit::Second => Ok(adjusted_date_time.timestamp()),
     }
-}
-
-/// Calls string_to_timestamp_nanos and converts the error type
-pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
-    string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
