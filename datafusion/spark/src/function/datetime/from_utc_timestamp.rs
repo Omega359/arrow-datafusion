@@ -32,7 +32,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignatureClass, Volatility,
 };
-use datafusion_functions::datetime::to_local_time::adjust_to_local_time;
+use datafusion_functions::datetime::common::adjust_to_local_time;
 use datafusion_functions::utils::make_scalar_function;
 
 /// Apache Spark `from_utc_timestamp` function.

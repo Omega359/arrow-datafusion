@@ -28,7 +28,7 @@ use arrow::datatypes::{ArrowTimestampType, DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
 use chrono::format::{Parsed, StrftimeItems, parse};
-use chrono::{DateTime, MappedLocalTime, TimeDelta, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
@@ -40,6 +40,59 @@ use std::ops::Add;
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+/// This function converts a timestamp with a timezone to a timestamp without a timezone.
+/// The display value of the adjusted timestamp remain the same, but the underlying timestamp
+/// representation is adjusted according to the relative timezone offset to UTC.
+///
+/// This function uses chrono to handle daylight saving time changes.
+///
+/// For example,
+///
+/// ```text
+/// '2019-03-31T01:00:00Z'::timestamp at time zone 'Europe/Brussels'
+/// ```
+///
+/// is displayed as follows in datafusion-cli:
+///
+/// ```text
+/// 2019-03-31T01:00:00+01:00
+/// ```
+///
+/// and is represented in DataFusion as:
+///
+/// ```text
+/// TimestampNanosecond(Some(1_553_990_400_000_000_000), Some("Europe/Brussels"))
+/// ```
+///
+/// To strip off the timezone while keeping the display value the same, we need to
+/// adjust the underlying timestamp with the timezone offset value using `adjust_to_local_time()`
+///
+/// ```text
+/// adjust_to_local_time(1_553_990_400_000_000_000, "Europe/Brussels") --> 1_553_994_000_000_000_000
+/// ```
+///
+/// The difference between `1_553_990_400_000_000_000` and `1_553_994_000_000_000_000` is
+/// `3600_000_000_000` ns, which corresponds to 1 hour. This matches with the timezone
+/// offset for "Europe/Brussels" for this date.
+///
+/// Note that the offset varies with daylight savings time (DST), which makes this tricky! For
+/// example, timezone "Europe/Brussels" has a 2-hour offset during DST and a 1-hour offset
+/// when DST ends.
+///
+/// Consequently, DataFusion can represent the timestamp in local time (with no offset or
+/// timezone information) as
+///
+/// ```text
+/// TimestampNanosecond(Some(1_553_994_000_000_000_000), None)
+/// ```
+///
+/// which is displayed as follows in datafusion-cli:
+///
+/// ```text
+/// 2019-03-31T01:00:00
+/// ```
+///
+/// See `test_adjust_to_local_time()` for example
 pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
     fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
     where
@@ -67,21 +120,10 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
         TimeUnit::Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
     };
 
-    // Get the timezone offset for this datetime
-    let tz_offset = tz.offset_from_utc_datetime(&date_time.naive_utc());
-    // Convert offset to seconds - offset is formatted like "+01:00" or "-05:00"
-    let offset_str = format!("{tz_offset}");
-    let offset_seconds: i64 = if let Some(stripped) = offset_str.strip_prefix('-') {
-        let parts: Vec<&str> = stripped.split(':').collect();
-        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        -((hours * 3600) + (mins * 60))
-    } else {
-        let parts: Vec<&str> = offset_str.split(':').collect();
-        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        (hours * 3600) + (mins * 60)
-    };
+    let offset_seconds: i64 = tz
+        .offset_from_utc_datetime(&date_time.naive_utc())
+        .fix()
+        .local_minus_utc() as i64;
 
     let adjusted_date_time = date_time.add(
         TimeDelta::try_seconds(offset_seconds)
