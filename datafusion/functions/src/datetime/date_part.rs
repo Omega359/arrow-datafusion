@@ -28,11 +28,11 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Field, FieldRef,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
+    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date};
 
@@ -50,6 +50,7 @@ use datafusion_common::{
     types::logical_string,
     utils::take_function_args,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -134,7 +135,7 @@ impl DatePartFunc {
                         Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
-                Volatility::Stable,
+                Volatility::Stable
             ),
             aliases: vec![String::from("datepart"), String::from("extract")],
         }
@@ -207,72 +208,10 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let (is_timezone_aware, tz_str_opt) = match array.data_type() {
-            Timestamp(_, Some(tz_str)) => (true, Some(Arc::clone(tz_str))),
-            _ => (false, None),
-        };
 
         let part_trim = part_normalization(&part);
         let is_epoch = is_epoch(part_trim);
-
-        // Epoch is timezone-independent - it always returns seconds since 1970-01-01 UTC
-        let array = if is_epoch {
-            array
-        } else if is_timezone_aware {
-            // For timezone-aware timestamps, extract in their own timezone
-            match tz_str_opt.as_ref() {
-                Some(tz_str) => {
-                    let tz = interpret_session_timezone(tz_str)?;
-                    match array.data_type() {
-                        Timestamp(time_unit, _) => match time_unit {
-                            Nanosecond => adjust_timestamp_array::<
-                                TimestampNanosecondType,
-                            >(&array, tz)?,
-                            Microsecond => adjust_timestamp_array::<
-                                TimestampMicrosecondType,
-                            >(&array, tz)?,
-                            Millisecond => adjust_timestamp_array::<
-                                TimestampMillisecondType,
-                            >(&array, tz)?,
-                            Second => {
-                                adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
-                            }
-                        },
-                        _ => array,
-                    }
-                }
-                None => array,
-            }
-        } else if let Timestamp(time_unit, None) = array.data_type() {
-            // For naive timestamps, interpret in session timezone if available
-            match config.execution.time_zone.as_ref() {
-                Some(tz_str) => {
-                    let tz = interpret_session_timezone(tz_str)?;
-
-                    match time_unit {
-                        Nanosecond => {
-                            adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
-                        }
-                        Microsecond => {
-                            adjust_timestamp_array::<TimestampMicrosecondType>(
-                                &array, tz,
-                            )?
-                        }
-                        Millisecond => {
-                            adjust_timestamp_array::<TimestampMillisecondType>(
-                                &array, tz,
-                            )?
-                        }
-                        Second => {
-                            adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
-                        }
-                    }
-                }
-                None => array,
-            }
-        } else {
-            array
-        };
+        let array = adjust_array_for_timezone(config, array, is_epoch)?;
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
@@ -406,8 +345,139 @@ fn is_epoch(part: &str) -> bool {
     matches!(part.to_lowercase().as_str(), "epoch")
 }
 
-// Try to remove quote if exist, if the quote is invalid, return original string
-// and let the downstream function handle the error.
+
+/// Adjusts the timezone of a given array containing timestamp data.
+///
+/// # Arguments
+///
+/// * `config` - A reference to an Arc (atomic reference-counted pointer) wrapping the configuration options.
+/// * `array`  - An Arc wrapping a dynamically typed array that needs to be adjusted for timezone.
+/// * `is_epoch` - A boolean flag indicating whether the timestamps are represented as epoch values.
+///
+/// # Behavior
+///
+/// This function first checks if the provided array contains timezone-aware timestamps or not.
+/// If so, it extracts these timestamps in their own timezone. If `is_epoch` is false and the array
+/// does not contain timezone-aware timestamps, but it contains naive timestamps (timestamps without
+/// associated timezone information), this function will interpret them in the session timezone if
+/// available in the configuration options.
+///
+/// If none of these conditions are met, the original array is returned.
+fn adjust_array_for_timezone(config: &Arc<ConfigOptions>, array: Arc<dyn Array>, is_epoch: bool) -> Result<Arc<dyn Array>> {
+    let (is_timezone_aware, tz_str_opt) = match array.data_type() {
+        Timestamp(_, Some(tz_str)) => (true, Some(Arc::clone(tz_str))),
+        _ => (false, None),
+    };
+
+    // Epoch is timezone-independent - it always returns seconds since 1970-01-01 UTC
+    let array = if is_epoch {
+        array
+    } else if is_timezone_aware {
+        // For timezone-aware timestamps, extract in their own timezone
+        match tz_str_opt.as_ref() {
+            Some(tz_str) => {
+                let tz = interpret_session_timezone(tz_str)?;
+                match array.data_type() {
+                    Timestamp(time_unit, _) => match time_unit {
+                        Nanosecond => adjust_timestamp_array::<
+                            TimestampNanosecondType,
+                        >(&array, tz)?,
+                        Microsecond => adjust_timestamp_array::<
+                            TimestampMicrosecondType,
+                        >(&array, tz)?,
+                        Millisecond => adjust_timestamp_array::<
+                            TimestampMillisecondType,
+                        >(&array, tz)?,
+                        Second => {
+                            adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
+                        }
+                    },
+                    _ => array,
+                }
+            }
+            None => array,
+        }
+    } else if let Timestamp(time_unit, None) = array.data_type() {
+        // For naive timestamps, interpret in session timezone if available
+        match config.execution.time_zone.as_ref() {
+            Some(tz_str) => {
+                let tz = interpret_session_timezone(tz_str)?;
+
+                match time_unit {
+                    Nanosecond => {
+                        adjust_timestamp_array::<TimestampNanosecondType>(&array, tz)?
+                    }
+                    Microsecond => {
+                        adjust_timestamp_array::<TimestampMicrosecondType>(
+                            &array, tz,
+                        )?
+                    }
+                    Millisecond => {
+                        adjust_timestamp_array::<TimestampMillisecondType>(
+                            &array, tz,
+                        )?
+                    }
+                    Second => {
+                        adjust_timestamp_array::<TimestampSecondType>(&array, tz)?
+                    }
+                }
+            }
+            None => array,
+        }
+    } else {
+        array
+    };
+
+    Ok(array)
+}
+
+fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
+    Some(match target_type {
+        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
+        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
+
+        Timestamp(unit, tz_opt) => {
+            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+
+            let utc_dt = if let Some(tz_str) = tz_opt {
+                let tz: Tz = tz_str.parse().ok()?;
+
+                let local = tz.from_local_datetime(&naive_midnight);
+
+                let local_dt = match local {
+                    chrono::offset::LocalResult::Single(dt) => dt,
+                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
+                    chrono::offset::LocalResult::None => local.earliest()?,
+                };
+
+                local_dt.with_timezone(&Utc)
+            } else {
+                Utc.from_utc_datetime(&naive_midnight)
+            };
+
+            match unit {
+                Second => {
+                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
+                }
+                Millisecond => ScalarValue::TimestampMillisecond(
+                    Some(utc_dt.timestamp_millis()),
+                    tz_opt.clone(),
+                ),
+                Microsecond => ScalarValue::TimestampMicrosecond(
+                    Some(utc_dt.timestamp_micros()),
+                    tz_opt.clone(),
+                ),
+                Nanosecond => ScalarValue::TimestampNanosecond(
+                    Some(utc_dt.timestamp_nanos_opt()?),
+                    tz_opt.clone(),
+                ),
+            }
+        }
+        _ => return None,
+    })
+}
+
+// Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
 fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
