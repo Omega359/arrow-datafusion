@@ -135,7 +135,7 @@ impl DatePartFunc {
                         Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
-                Volatility::Stable
+                Volatility::Immutable
             ),
             aliases: vec![String::from("datepart"), String::from("extract")],
         }
