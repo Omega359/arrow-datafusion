@@ -1715,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "clap",
@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1837,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1859,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1890,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "futures",
  "log",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -1962,7 +1962,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-arrow"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -2004,7 +2004,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2080,11 +2080,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "52.2.0"
+version = "52.3.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2148,7 +2148,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "abi_stable",
  "arrow",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "criterion",
@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "datafusion-doc",
  "quote",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-adapter"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2541,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pruning"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2571,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "async-trait",
  "datafusion-common",
@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "52.2.0"
+version = "52.3.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -2753,7 +2753,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2909,7 +2909,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4187,7 +4187,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4805,7 +4805,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -4824,7 +4824,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -4896,9 +4896,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -4926,7 +4926,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5293,7 +5293,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5548,6 +5548,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap 2.13.0",
  "itoa",
  "memchr",
  "serde",
@@ -5905,11 +5906,12 @@ dependencies = [
 
 [[package]]
 name = "substrait"
-version = "0.62.2"
+version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62fc4b483a129b9772ccb9c3f7945a472112fdd9140da87f8a4e7f1d44e045d0"
+checksum = "e620ff4d5c02fd6f7752931aa74b16a26af66a63022cc1ad412c77edbe0bab47"
 dependencies = [
  "heck",
+ "indexmap 2.13.0",
  "pbjson 0.8.0",
  "pbjson-build 0.8.0",
  "pbjson-types",
@@ -6001,7 +6003,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6959,7 +6961,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
