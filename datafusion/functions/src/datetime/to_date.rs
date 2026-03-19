@@ -26,8 +26,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
