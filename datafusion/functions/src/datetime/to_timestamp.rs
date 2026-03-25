@@ -848,7 +848,6 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::datetime::parser::chrono::ChronoDateTimeParser;
@@ -860,9 +859,8 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DataFusionError, ScalarValue, assert_contains};
-    use datafusion_expr::{ScalarFunctionArgs, ScalarFunctionImplementation};
+    use datafusion_common::{DataFusionError, assert_contains};
+    use datafusion_expr::ScalarFunctionImplementation;
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
