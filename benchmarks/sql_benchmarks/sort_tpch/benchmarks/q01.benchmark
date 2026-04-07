@@ -1,0 +1,5 @@
+echo Loading tpch items sorted: ${BENCH_SORTED:-false}
+
+template sql_benchmarks/sort_tpch/sort_tpch.benchmark.template
+QUERY_NUMBER=1
+QUERY_NUMBER_PADDED=01

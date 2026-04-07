@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=31
+QUERY_NUMBER_PADDED=31
+#RESULT_QUERY=SELECT MIN(c), MAX(c), COUNT(*) FROM bench_answer

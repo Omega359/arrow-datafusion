@@ -1,0 +1,5 @@
+-- Q13: LEFT SEMI 30K x 30K | HIGH 99.9%
+SELECT t1.*
+FROM range(30000) AS t1
+    LEFT SEMI JOIN range(30000) AS t2
+ON t1.value < t2.value;

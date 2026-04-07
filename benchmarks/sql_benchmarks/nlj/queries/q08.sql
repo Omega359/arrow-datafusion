@@ -1,0 +1,5 @@
+-- Q8: LEFT OUTER 200K x 10K | LOW 0.1%
+SELECT *
+FROM range(200000) AS t1
+         LEFT JOIN range(10000) AS t2
+                   ON (t1.value + t2.value) % 1000 = 0;

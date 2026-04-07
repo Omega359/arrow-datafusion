@@ -1,0 +1,4 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=20
+QUERY_NUMBER_PADDED=20

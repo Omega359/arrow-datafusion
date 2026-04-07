@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=24
+QUERY_NUMBER_PADDED=24
+#RESULT_QUERY=SELECT * FROM (SELECT * FROM bench_answer LIMIT 4) ORDER BY SearchPhrase

@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=21
+QUERY_NUMBER_PADDED=21
+#RESULT_QUERY=SELECT * FROM bench_answer ORDER BY c DESC, SearchPhrase LIMIT 8

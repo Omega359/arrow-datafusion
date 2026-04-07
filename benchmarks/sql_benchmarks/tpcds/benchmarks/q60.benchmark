@@ -1,0 +1,5 @@
+
+
+template sql_benchmarks/tpcds/tpcds.benchmark.template
+QUERY_NUMBER=60
+QUERY_NUMBER_PADDED=60

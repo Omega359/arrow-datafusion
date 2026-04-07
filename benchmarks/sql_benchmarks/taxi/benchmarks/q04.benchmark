@@ -1,0 +1,8 @@
+
+template sql_benchmarks/taxi/taxi.benchmark.template
+QUERY_NUMBER=4
+QUERY_NUMBER_PADDED=04
+RESULT_QUERY=SELECT passenger_count, DATE_PART('year', pickup_datetime) AS year, ROUND(trip_distance) AS distance, COUNT(*) as count FROM trips GROUP BY passenger_count, year, distance ORDER BY passenger_count, year, distance, count;
+
+
+

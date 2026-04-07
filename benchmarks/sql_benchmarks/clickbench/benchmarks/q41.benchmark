@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=41
+QUERY_NUMBER_PADDED=41
+#RESULT_QUERY=SELECT MIN(PageViews), MAX(PageViews), COUNT(*) FROM bench_answer

@@ -1,0 +1,9 @@
+--  Q1: Very Small Build Side (Dense)
+-- Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
+-- density: 1.0,
+-- prob_hit: 1.0,
+-- build_size: "25",
+-- probe_size: "1.5M",
+SELECT n_nationkey
+FROM nation
+         JOIN customer ON c_nationkey = n_nationkey;

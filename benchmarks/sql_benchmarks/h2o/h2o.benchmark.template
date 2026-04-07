@@ -1,0 +1,15 @@
+name Q${QUERY_NUMBER_PADDED}
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} ${BENCH_SUBGROUP:-groupby} ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_${BENCH_SUBGROUP:-groupby}_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run sql_benchmarks/h2o/queries/${BENCH_SUBGROUP:-groupby}/q${QUERY_NUMBER_PADDED}.sql
+
+result sql_benchmarks/h2o/results/${BENCH_SUBGROUP:-groupby}/${H2O_BENCH_SIZE:-small}/q${QUERY_NUMBER_PADDED}.csv

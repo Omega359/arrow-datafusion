@@ -1,0 +1,4 @@
+
+template sql_benchmarks/smj/smj.benchmark.template
+QUERY_NUMBER=18
+QUERY_NUMBER_PADDED=18

@@ -1,0 +1,6 @@
+
+template sql_benchmarks/smj/smj.benchmark.template
+QUERY_NUMBER=24
+QUERY_NUMBER_PADDED=24
+
+expect_plan LeftMark

@@ -1,0 +1,4 @@
+
+template sql_benchmarks/nlj/nlj.benchmark.template
+QUERY_NUMBER=14
+QUERY_NUMBER_PADDED=14

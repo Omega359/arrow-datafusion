@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=18
+QUERY_NUMBER_PADDED=18
+#RESULT_QUERY=SELECT * FROM bench_answer ORDER BY 4 DESC, 1
