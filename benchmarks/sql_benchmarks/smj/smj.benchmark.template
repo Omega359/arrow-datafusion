@@ -1,0 +1,13 @@
+
+name Q${QUERY_NUMBER_PADDED}
+group smj
+
+init
+set datafusion.optimizer.prefer_hash_join=false;
+
+expect_plan SortMergeJoinExec
+
+run sql_benchmarks/smj/queries/q${QUERY_NUMBER_PADDED}.sql
+
+cleanup
+reset datafusion.optimizer.prefer_hash_join;

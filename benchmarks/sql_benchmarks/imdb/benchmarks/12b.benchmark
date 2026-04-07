@@ -1,0 +1,4 @@
+
+template sql_benchmarks/imdb/imdb.benchmark.template
+QUERY_NUMBER=12b
+QUERY_NUMBER_PADDED=12b

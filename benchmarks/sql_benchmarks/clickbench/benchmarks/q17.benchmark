@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=17
+QUERY_NUMBER_PADDED=17
+#RESULT_QUERY=SELECT COUNT(*) AS count FROM (SELECT UserID, SearchPhrase FROM bench_answer GROUP BY UserID, SearchPhrase) t

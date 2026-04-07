@@ -1,0 +1,1 @@
+SELECT * FROM hits ORDER BY "EventTime" DESC limit 10;

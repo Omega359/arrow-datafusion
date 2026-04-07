@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=30
+QUERY_NUMBER_PADDED=30
+#RESULT_QUERY=SELECT * FROM bench_answer ORDER BY c DESC, ClientIP LIMIT 9

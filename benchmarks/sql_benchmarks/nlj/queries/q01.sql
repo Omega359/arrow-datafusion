@@ -1,0 +1,5 @@
+-- Q1: INNER 10K x 10K | LOW 0.1%
+SELECT *
+FROM range(10000) AS t1
+         JOIN range(10000) AS t2
+              ON (t1.value + t2.value) % 1000 = 0;

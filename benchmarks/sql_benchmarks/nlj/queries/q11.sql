@@ -1,0 +1,5 @@
+-- Q11: INNER 30K x 30K | MEDIUM 50% | cheap predicate
+SELECT *
+FROM range(30000) AS t1
+         INNER JOIN range(30000) AS t2
+                    ON (t1.value > t2.value);

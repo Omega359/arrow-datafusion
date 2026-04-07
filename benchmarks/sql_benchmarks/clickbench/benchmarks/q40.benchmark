@@ -1,0 +1,5 @@
+
+template sql_benchmarks/clickbench/clickbench.benchmark.template
+QUERY_NUMBER=40
+QUERY_NUMBER_PADDED=40
+#RESULT_QUERY=SELECT * FROM bench_answer ORDER BY PageViews DESC, URLHash OFFSET 2 LIMIT 5

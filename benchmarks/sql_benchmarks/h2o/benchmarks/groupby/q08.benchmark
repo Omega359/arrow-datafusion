@@ -1,0 +1,5 @@
+subgroup groupby
+
+template sql_benchmarks/h2o/h2o.benchmark.template
+QUERY_NUMBER=8
+QUERY_NUMBER_PADDED=08
