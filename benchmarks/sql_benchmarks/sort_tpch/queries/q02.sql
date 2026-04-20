@@ -2,4 +2,4 @@
 SELECT l_orderkey, l_partkey
 FROM lineitem
 ORDER BY l_orderkey
-${LIMIT|LIMIT 100| }
+${LIMIT:-false|LIMIT 100| }

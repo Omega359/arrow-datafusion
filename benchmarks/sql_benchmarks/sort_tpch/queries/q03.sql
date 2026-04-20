@@ -2,4 +2,4 @@
 SELECT l_comment, l_partkey
 FROM lineitem
 ORDER BY l_comment
-${LIMIT|LIMIT 100| }
+${LIMIT:-false|LIMIT 100| }
