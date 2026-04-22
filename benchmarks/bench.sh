@@ -408,6 +408,8 @@ main() {
                     run_tpch "10" "parquet"
                     run_tpch "10" "csv"
                     run_tpch_mem "10"
+                    run_sort_tpch "1"
+                    run_topk_tpch
                     run_cancellation
                     run_clickbench_1
                     run_clickbench_partitioned
@@ -415,10 +417,10 @@ main() {
                     run_clickbench_extended
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
-                    run_h2o "BIG" "PARQUET" "groupby"
                     run_h2o_join "SMALL" "PARQUET" "join"
                     run_h2o_join "MEDIUM" "PARQUET" "join"
-                    run_h2o_join "BIG" "PARQUET" "join"
+                    run_h2o_join "SMALL" "PARQUET" "window"
+                    run_h2o_join "MEDIUM" "PARQUET" "window"
                     run_imdb
                     run_external_aggr
                     run_nlj
