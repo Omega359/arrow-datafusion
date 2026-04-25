@@ -26,7 +26,7 @@ use datafusion::prelude::{CsvReadOptions, DataFrame, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use futures::StreamExt;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -92,8 +92,9 @@ impl SqlBenchmark {
             last_results: None,
             echo: vec![],
         };
-        bm.replacement_mapping.insert(
-            "BENCHMARK_DIR".to_string(),
+        insert_replacement(
+            &mut bm.replacement_mapping,
+            "BENCHMARK_DIR",
             benchmark_directory.to_string_lossy().into_owned(),
         );
 
@@ -326,6 +327,8 @@ impl SqlBenchmark {
         )
         .await?;
 
+        ctx.deregister_table("persist_data")?;
+
         Ok(())
     }
 
@@ -476,8 +479,11 @@ impl SqlBenchmark {
         debug!("Processing file {}", path.display());
 
         let mut replacement_mapping = self.replacement_mapping.clone();
-        replacement_mapping
-            .insert("FILE_PATH".to_string(), path.to_string_lossy().into_owned());
+        insert_replacement(
+            &mut replacement_mapping,
+            "FILE_PATH",
+            path.to_string_lossy().into_owned(),
+        );
 
         let mut reader = BenchmarkFileReader::new(path, replacement_mapping)?;
         let mut line = String::with_capacity(1024);
@@ -807,7 +813,7 @@ impl BenchmarkDirective {
                         break;
                     } else {
                         query.push_str(line);
-                        query.push(' ');
+                        query.push('\n');
                     }
                 }
                 Some(Err(e)) => return Err(e),
@@ -839,10 +845,11 @@ impl BenchmarkDirective {
             let query_file = query_file.replace("\r\n", "\n");
 
             // some files have multiple queries, split apart
-            for query in query_file
-                .split("\n\n")
-                .flat_map(|query| query.split(";\n"))
-            {
+            for query in split_query_statements(&query_file) {
+                bench.process_query(splits, query.to_string())?;
+            }
+        } else if directive == QueryDirective::Run {
+            for query in split_query_statements(&query) {
                 bench.process_query(splits, query.to_string())?;
             }
         } else {
@@ -870,12 +877,12 @@ impl BenchmarkDirective {
             _ => unreachable!("unsupported metadata directive: {directive}"),
         }
 
-        bench
-            .replacement_mapping
-            .insert(replacement_key.to_string(), value.clone());
-        reader
-            .replacements
-            .insert(replacement_key.to_string(), value);
+        insert_replacement(
+            &mut bench.replacement_mapping,
+            replacement_key,
+            value.clone(),
+        );
+        insert_replacement(&mut reader.replacements, replacement_key, value);
 
         Ok(())
     }
@@ -1098,9 +1105,11 @@ impl BenchmarkDirective {
                             )
                         ));
                     };
-                    bench
-                        .replacement_mapping
-                        .insert(key.trim().to_string(), value.trim().to_string());
+                    insert_replacement(
+                        &mut bench.replacement_mapping,
+                        key.trim(),
+                        value.trim().to_string(),
+                    );
                 }
                 Some(Err(e)) => return Err(e),
                 None => break,
@@ -1208,8 +1217,6 @@ pub struct BenchmarkQuery {
     expected_result: Vec<Vec<String>>,
 }
 
-impl BenchmarkQuery {}
-
 // ---- utility function below
 
 fn directive_value<'a>(
@@ -1245,6 +1252,10 @@ fn parse_group_from_path(path: &Path, benchmark_directory: &Path) -> String {
         parent = p.parent();
     }
 
+    if group_name.is_empty() {
+        warn!("Unable to find group name in path: {}", path.display());
+    }
+
     group_name
 }
 
@@ -1274,6 +1285,16 @@ fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
 }
 
+fn split_query_statements(sql: &str) -> impl Iterator<Item = &str> {
+    sql.split("\n\n")
+        .flat_map(|query| {
+            query
+                .split_inclusive(";\n")
+                .map(|part| part.trim_end_matches('\n'))
+        })
+        .filter(|query| !query.trim().is_empty())
+}
+
 fn is_blank_line(line: &str) -> bool {
     line.trim().is_empty()
 }
@@ -1285,6 +1306,14 @@ fn is_comment_line(line: &str) -> bool {
 
 fn is_blank_or_comment_line(line: &str) -> bool {
     is_blank_line(line) || is_comment_line(line)
+}
+
+fn insert_replacement(
+    replacement_map: &mut HashMap<String, String>,
+    key: &str,
+    value: String,
+) {
+    replacement_map.insert(key.to_lowercase(), value);
 }
 
 fn replace_all<E>(
@@ -1376,11 +1405,8 @@ fn lookup_replacement_value(
     replacement_map: &HashMap<String, String>,
     get_env: &impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    // search replacement map for key
-    for (k, v) in replacement_map {
-        if key.eq_ignore_ascii_case(k) {
-            return Some(v.to_string());
-        }
+    if let Some(v) = replacement_map.get(&key.to_lowercase()) {
+        return Some(v.to_string());
     }
 
     // look in env variables
@@ -1602,6 +1628,14 @@ mod tests {
     }
 
     fn replacement_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut replacements = HashMap::new();
+        for (key, value) in entries {
+            insert_replacement(&mut replacements, key, value.to_string());
+        }
+        replacements
+    }
+
+    fn env_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -1631,7 +1665,7 @@ mod tests {
     #[test]
     fn process_replacements_uses_env_when_map_value_is_missing() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("DATA_DIR", "/tmp/data")]);
+        let env = env_map(&[("DATA_DIR", "/tmp/data")]);
 
         let actual = process_replacements_with_env(
             "${data_dir}/lineitem.parquet",
@@ -1646,7 +1680,7 @@ mod tests {
     #[test]
     fn process_replacements_prefers_map_over_env() {
         let replacements = replacement_map(&[("BENCH_SIZE", "10")]);
-        let env = replacement_map(&[("BENCH_SIZE", "100")]);
+        let env = env_map(&[("BENCH_SIZE", "100")]);
 
         let actual =
             process_replacements_with_env("sf${BENCH_SIZE}", &replacements, |key| {
@@ -1689,7 +1723,7 @@ mod tests {
     #[test]
     fn process_replacements_applies_true_false_true_branch() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("USE_PARQUET", "TrUe")]);
+        let env = env_map(&[("USE_PARQUET", "TrUe")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-false|parquet|csv}.sql",
@@ -1704,7 +1738,7 @@ mod tests {
     #[test]
     fn process_replacements_applies_true_false_false_branch() {
         let replacements = HashMap::new();
-        let env = replacement_map(&[("USE_PARQUET", "false")]);
+        let env = env_map(&[("USE_PARQUET", "false")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-true|parquet|csv}.sql",
@@ -1733,7 +1767,7 @@ mod tests {
     #[test]
     fn process_replacements_prefers_map_over_env_for_true_false_branch() {
         let replacements = replacement_map(&[("USE_PARQUET", "false")]);
-        let env = replacement_map(&[("USE_PARQUET", "true")]);
+        let env = env_map(&[("USE_PARQUET", "true")]);
 
         let actual = process_replacements_with_env(
             "load_${USE_PARQUET:-true|parquet|csv}.sql",
@@ -1795,7 +1829,7 @@ mod tests {
     #[test]
     fn process_replacements_resolves_variables_after_true_false_replacement() {
         let replacements = replacement_map(&[("FILE_TYPE", "parquet")]);
-        let env = replacement_map(&[("USE_TYPED_PATH", "true")]);
+        let env = env_map(&[("USE_TYPED_PATH", "true")]);
 
         let actual = process_replacements_with_env(
             "${USE_TYPED_PATH:-false|data.${FILE_TYPE}|data.csv}",
@@ -1882,6 +1916,32 @@ DROP VIEW v;
                 .get(&QueryDirective::Cleanup)
                 .expect("cleanup query"),
             &vec!["DROP VIEW v;".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn parser_splits_inline_run_block_on_semicolon_newline() {
+        let benchmark = parse_benchmark(
+            r#"
+run
+CREATE TABLE t AS SELECT 1 AS value;
+SELECT value + 1 AS value FROM t;
+DROP TABLE t;
+"#,
+        )
+        .await
+        .expect("benchmark should parse");
+
+        assert_eq!(
+            benchmark
+                .queries()
+                .get(&QueryDirective::Run)
+                .expect("run query"),
+            &vec![
+                "CREATE TABLE t AS SELECT 1 AS value;".to_string(),
+                "SELECT value + 1 AS value FROM t;".to_string(),
+                "DROP TABLE t;".to_string(),
+            ]
         );
     }
 
@@ -2056,7 +2116,7 @@ NULL|(empty)
             &vec!["select 'orders'".to_string()]
         );
         assert_eq!(
-            benchmark.replacement_mapping().get("TABLE_NAME"),
+            benchmark.replacement_mapping().get("table_name"),
             Some(&"orders".to_string())
         );
     }
@@ -2130,9 +2190,9 @@ NULL|(empty)
                 .get(&QueryDirective::Run)
                 .expect("run queries"),
             &vec![
-                "SELECT 1 AS value".to_string(),
+                "SELECT 1 AS value;".to_string(),
                 "SELECT 2 AS value;".to_string(),
-                "WITH t AS (SELECT 3 AS value) SELECT * FROM t".to_string(),
+                "WITH t AS (SELECT 3 AS value) SELECT * FROM t;".to_string(),
             ]
         );
     }
@@ -2166,7 +2226,7 @@ NULL|(empty)
                 .queries()
                 .get(&QueryDirective::Run)
                 .expect("run query"),
-            &vec!["SELECT 5 AS value".to_string()]
+            &vec!["SELECT 5 AS value;".to_string()]
         );
     }
 
@@ -2302,8 +2362,8 @@ NULL|(empty)
                 .get(&QueryDirective::Run)
                 .expect("run queries"),
             &vec![
-                "SELECT 1 AS value".to_string(),
-                "SELECT 2 AS value".to_string()
+                "SELECT 1 AS value;".to_string(),
+                "SELECT 2 AS value;".to_string()
             ]
         );
     }
@@ -3021,6 +3081,20 @@ SELECT 1;
         let mut benchmark = parse_benchmark_file(&benchmark_path)
             .await
             .expect("benchmark should parse");
+        let ctx = SessionContext::new();
+
+        benchmark.run(&ctx, true).await.expect("run should succeed");
+
+        assert_eq!(formatted_last_results(&benchmark), vec![vec!["3"]]);
+    }
+
+    #[tokio::test]
+    async fn run_inline_multi_statement_only_keeps_last_select_or_with_result() {
+        let mut benchmark = parse_benchmark(
+            "run\nCREATE TABLE t AS SELECT 1 AS value;\nSELECT 2 AS value;\nWITH u AS (SELECT 3 AS value) SELECT value FROM u;\n",
+        )
+        .await
+        .expect("benchmark should parse");
         let ctx = SessionContext::new();
 
         benchmark.run(&ctx, true).await.expect("run should succeed");
