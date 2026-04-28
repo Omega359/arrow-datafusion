@@ -1,5 +1,14 @@
+name Q04
+group tpcds
 
 
-template sql_benchmarks/tpcds/tpcds.benchmark.template
-QUERY_NUMBER=4
-QUERY_NUMBER_PADDED=04
+load sql_benchmarks/tpcds/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from web_site;
+----
+true
+
+run ../datafusion/core/tests/tpc-ds/4.sql
+
+result sql_benchmarks/tpcds/results/sf${BENCH_SIZE:-1}/4.csv

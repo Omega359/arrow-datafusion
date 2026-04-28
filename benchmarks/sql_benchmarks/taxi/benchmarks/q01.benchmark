@@ -1,5 +1,17 @@
 
-template sql_benchmarks/taxi/taxi.benchmark.template
-QUERY_NUMBER=1
-QUERY_NUMBER_PADDED=01
-RESULT_QUERY=SELECT cab_type, COUNT(*) as count FROM trips GROUP BY cab_type ORDER BY cab_type, count;
+name Q01
+group taxi
+
+echo Loading taxi data
+
+load sql_benchmarks/taxi/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from trips;
+----
+true
+
+run
+SELECT cab_type, COUNT(*) as count FROM trips GROUP BY cab_type ORDER BY cab_type, count;
+
+result sql_benchmarks/taxi/results/q01.csv

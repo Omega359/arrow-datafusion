@@ -1,4 +1,7 @@
 
-template sql_benchmarks/nlj/nlj.benchmark.template
-QUERY_NUMBER=7
-QUERY_NUMBER_PADDED=07
+name Q07
+group nlj
+
+expect_plan NestedLoopJoinExec
+
+run sql_benchmarks/nlj/queries/q07.sql

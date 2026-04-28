@@ -1,4 +1,12 @@
+name Q10
+group smj
 
-template sql_benchmarks/smj/smj.benchmark.template
-QUERY_NUMBER=10
-QUERY_NUMBER_PADDED=10
+init
+set datafusion.optimizer.prefer_hash_join=false;
+
+expect_plan SortMergeJoinExec
+
+run sql_benchmarks/smj/queries/q10.sql
+
+cleanup
+reset datafusion.optimizer.prefer_hash_join;

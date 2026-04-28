@@ -1,4 +1,15 @@
+name Q29b
+group imdb
 
-template sql_benchmarks/imdb/imdb.benchmark.template
-QUERY_NUMBER=29b
-QUERY_NUMBER_PADDED=29b
+echo Loading imdb tables
+
+load sql_benchmarks/imdb/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from title;
+----
+true
+
+run sql_benchmarks/imdb/queries/29b.sql
+
+result sql_benchmarks/imdb/results/29b.csv

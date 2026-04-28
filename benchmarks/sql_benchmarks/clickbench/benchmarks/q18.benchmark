@@ -1,5 +1,17 @@
 
-template sql_benchmarks/clickbench/clickbench.benchmark.template
-QUERY_NUMBER=18
-QUERY_NUMBER_PADDED=18
+name Q18
+group clickbench
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run sql_benchmarks/clickbench/queries/q18.sql
+
+result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q18.csv
 #RESULT_QUERY=SELECT * FROM bench_answer ORDER BY 4 DESC, 1

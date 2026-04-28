@@ -1,5 +1,17 @@
 subgroup window
 
-template sql_benchmarks/h2o/h2o.benchmark.template
-QUERY_NUMBER=9
-QUERY_NUMBER_PADDED=09
+name Q09
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run sql_benchmarks/h2o/queries/window/q09.sql
+
+result sql_benchmarks/h2o/results/window/${H2O_BENCH_SIZE:-small}/q09.csv

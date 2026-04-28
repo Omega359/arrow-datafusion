@@ -1,4 +1,14 @@
+name Q11
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
 
-template sql_benchmarks/clickbench_extended/clickbench.benchmark.template
-QUERY_NUMBER=11
-QUERY_NUMBER_PADDED=11
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run sql_benchmarks/clickbench_extended/queries/q11.sql
+
+result sql_benchmarks/clickbench_extended/results/q11.csv

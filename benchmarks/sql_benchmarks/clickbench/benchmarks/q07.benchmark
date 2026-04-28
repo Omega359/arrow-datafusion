@@ -1,4 +1,16 @@
 
-template sql_benchmarks/clickbench/clickbench.benchmark.template
-QUERY_NUMBER=7
-QUERY_NUMBER_PADDED=07
+name Q07
+group clickbench
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run sql_benchmarks/clickbench/queries/q07.sql
+
+result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q07.csv

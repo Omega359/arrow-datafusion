@@ -1,4 +1,15 @@
+name Q16d
+group imdb
 
-template sql_benchmarks/imdb/imdb.benchmark.template
-QUERY_NUMBER=16d
-QUERY_NUMBER_PADDED=16d
+echo Loading imdb tables
+
+load sql_benchmarks/imdb/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from title;
+----
+true
+
+run sql_benchmarks/imdb/queries/16d.sql
+
+result sql_benchmarks/imdb/results/16d.csv

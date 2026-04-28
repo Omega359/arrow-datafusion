@@ -1,5 +1,17 @@
 subgroup join
 
-template sql_benchmarks/h2o/h2o.benchmark.template
-QUERY_NUMBER=1
-QUERY_NUMBER_PADDED=01
+name Q01
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} join ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_join_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run sql_benchmarks/h2o/queries/join/q01.sql
+
+result sql_benchmarks/h2o/results/join/${H2O_BENCH_SIZE:-small}/q01.csv

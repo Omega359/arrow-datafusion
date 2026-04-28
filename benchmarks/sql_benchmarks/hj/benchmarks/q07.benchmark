@@ -1,4 +1,13 @@
+name Q07
+group hj
 
-template sql_benchmarks/hj/hj.benchmark.template
-QUERY_NUMBER=7
-QUERY_NUMBER_PADDED=07
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM customer
+----
+true
+
+expect_plan HashJoinExec
+
+run sql_benchmarks/hj/queries/q07.sql
