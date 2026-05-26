@@ -63,7 +63,7 @@ mod style;
 mod suite;
 
 use crate::benchmark_runner::cli::{
-    InspectArgs, RunnerCommand, SuiteCliOptions, build_cli_for_args_with_options,
+    InspectArgs, RunnerCommand, SuiteCliOptions, build_cli,
     command_from_matches_with_options, format_sql_run_help_sections_styled,
     normalize_suite_option_aliases_with_options,
 };
@@ -101,8 +101,7 @@ where
     let args = normalize_suite_option_aliases_with_options(&suite_cli_options, args);
 
     let root_help_requested = is_root_help_request(&args);
-    let mut cli =
-        build_cli_for_args_with_options(&registry, &suite_cli_options, &native, &args);
+    let mut cli = build_cli(&registry, &native);
     let matches = match cli.try_get_matches_from_mut(args) {
         Ok(matches) => matches,
         Err(e) if e.kind() == ErrorKind::DisplayHelp => {
@@ -228,12 +227,12 @@ async fn load_info_output(
             ))
         })?;
         suite.resolve_option_values(&args.suite_options)?;
-        let run_help_sections = format_sql_run_help_sections_styled(registry)?;
+        let run_help_sections = format_sql_run_help_sections_styled()?;
         return write_suite_info_styled(&ResolvedSuite::from(suite), &run_help_sections);
     }
 
     let (target, sql) = load_benchmark(registry, benchmark_dir, args).await?;
-    let run_help_sections = format_sql_run_help_sections_styled(registry)?;
+    let run_help_sections = format_sql_run_help_sections_styled()?;
 
     write_info_styled(target.suite.as_ref(), &sql, &run_help_sections)
 }
