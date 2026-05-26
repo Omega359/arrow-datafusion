@@ -39,6 +39,8 @@ const BENCHMARK_TARGET_HEADING: &str = "SQL Benchmark Target";
 const RUNNER_OPTIONS_HEADING: &str = "Runner Options";
 const DATAFUSION_OPTIONS_HEADING: &str = "DataFusion Options";
 const SUITE_OPTIONS_HEADING: &str = "Suite Options";
+/// `CommonOpt` arguments shown under the DataFusion Options heading. This is
+/// every `CommonOpt` field except `iterations`, which is a runner option.
 const DATAFUSION_ARG_IDS: &[&str] = &[
     "partitions",
     "batch_size",
@@ -48,16 +50,7 @@ const DATAFUSION_ARG_IDS: &[&str] = &[
     "debug",
     "simulate_latency",
 ];
-const RUN_ENV_ARG_IDS: &[&str] = &[
-    "iterations",
-    "partitions",
-    "batch_size",
-    "mem_pool_type",
-    "memory_limit",
-    "sort_spill_reservation_bytes",
-    "debug",
-    "simulate_latency",
-];
+/// `CommonOpt` arguments hidden from `run` help entirely.
 const HIDDEN_RUN_ARG_IDS: &[&str] = &["debug", "sort_spill_reservation_bytes"];
 
 /// Parsed top-level command selected by clap and dynamic suite metadata.
@@ -320,7 +313,9 @@ fn base_run_command() -> Command {
             .help_heading(RUNNER_OPTIONS_HEADING),
     );
     let run = set_help_heading(run, DATAFUSION_ARG_IDS, DATAFUSION_OPTIONS_HEADING);
-    let run = hide_env_annotations(run, RUN_ENV_ARG_IDS);
+    // Every CommonOpt arg exposes an `env`; the runner help suppresses all of
+    // them. No hand-added run arg has an env, so this is a no-op for those.
+    let run = run.mut_args(|arg| arg.hide_env(true));
 
     hide_help_entries(run, HIDDEN_RUN_ARG_IDS)
 }
@@ -666,16 +661,6 @@ fn set_help_heading(
 ) -> Command {
     for id in arg_ids {
         command = command.mut_arg(id, |arg| arg.help_heading(heading));
-    }
-
-    command
-}
-
-/// Hides environment-variable annotations from help while preserving the
-/// underlying argument behavior.
-fn hide_env_annotations(mut command: Command, arg_ids: &[&str]) -> Command {
-    for id in arg_ids {
-        command = command.mut_arg(id, |arg| arg.hide_env(true));
     }
 
     command
