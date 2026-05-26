@@ -27,7 +27,7 @@
 use crate::benchmark_runner::native::NativeBenchmarks;
 use crate::benchmark_runner::output::write_help_section;
 use crate::benchmark_runner::style::{HELP_STYLES, header};
-use crate::benchmark_runner::suite::{SuiteConfig, SuiteOption, SuiteRegistry};
+use crate::benchmark_runner::suite::{SuiteOption, SuiteRegistry};
 use crate::util::CommonOpt;
 use clap::{Arg, ArgAction, ArgMatches, Args, Command};
 use datafusion_common::{Result, exec_datafusion_err};
@@ -75,26 +75,6 @@ pub enum RunnerCommand {
     Query(InspectArgs),
 }
 
-/// Suite-option visibility used while constructing selector subcommands.
-#[derive(Clone, Copy)]
-enum SelectorSuiteOptions<'a> {
-    /// Include every discovered suite option.
-    All,
-    /// Include only options from the selected suite.
-    Suite(&'a SuiteConfig),
-    /// Do not include suite options.
-    None,
-}
-
-/// Selector subcommands that accept a SQL suite name.
-#[derive(Clone, Copy)]
-enum SelectorCommand {
-    /// The `info` subcommand.
-    Info,
-    /// The `query` subcommand.
-    Query,
-}
-
 /// Common selector arguments for SQL inspection and execution commands.
 #[derive(Debug, Clone)]
 pub struct InspectArgs {
@@ -104,34 +84,6 @@ pub struct InspectArgs {
     pub query_id: Option<String>,
     /// Suite option values supplied by the user.
     pub suite_options: BTreeMap<String, String>,
-}
-
-/// Per-subcommand suite-option visibility used for help rendering.
-#[derive(Clone, Copy)]
-struct SelectorOptionVisibility<'a> {
-    info: SelectorSuiteOptions<'a>,
-    query: SelectorSuiteOptions<'a>,
-}
-
-/// Constructs visibility rules for normal and help-specific command trees.
-impl<'a> SelectorOptionVisibility<'a> {
-    /// Shows all suite options for each selector command.
-    fn all() -> Self {
-        Self {
-            info: SelectorSuiteOptions::All,
-            query: SelectorSuiteOptions::All,
-        }
-    }
-
-    /// Shows a selected option set for one selector command's help output.
-    fn for_help(command: SelectorCommand, options: SelectorSuiteOptions<'a>) -> Self {
-        let mut visibility = Self::all();
-        match command {
-            SelectorCommand::Info => visibility.info = options,
-            SelectorCommand::Query => visibility.query = options,
-        };
-        visibility
-    }
 }
 
 /// Precomputed suite option metadata used while parsing dynamic CLI options.
@@ -181,70 +133,24 @@ impl SuiteCliOptions {
     }
 }
 
-/// Builds the full command tree with all discovered suite options available.
+/// Builds the full clap command tree.
+///
+/// Every suite's options are registered on the `info` and `query` selector
+/// subcommands so any of them can be parsed regardless of the selected suite.
+/// `--help` for those subcommands therefore lists the union of all suite
+/// options; the curated per-suite view lives in the `info <suite>` output.
 pub(crate) fn build_cli(registry: &SuiteRegistry, native: &NativeBenchmarks) -> Command {
-    build_cli_with_selector_options(registry, native, SelectorOptionVisibility::all())
-}
-
-/// Builds a command tree using precomputed suite option metadata.
-pub(crate) fn build_cli_for_args_with_options(
-    registry: &SuiteRegistry,
-    suite_cli_options: &SuiteCliOptions,
-    native: &NativeBenchmarks,
-    args: &[OsString],
-) -> Command {
-    match selector_help_request(suite_cli_options, args) {
-        Some((command, Some(selector))) => {
-            let options = registry
-                .get(&selector)
-                .map(SelectorSuiteOptions::Suite)
-                .unwrap_or(SelectorSuiteOptions::None);
-
-            build_cli_with_help_options(registry, native, command, options)
-        }
-        Some((command, None)) => build_cli_with_help_options(
-            registry,
-            native,
-            command,
-            SelectorSuiteOptions::None,
-        ),
-        None => build_cli(registry, native),
-    }
-}
-
-/// Builds a help-oriented command tree for one selector subcommand.
-fn build_cli_with_help_options(
-    registry: &SuiteRegistry,
-    native: &NativeBenchmarks,
-    command: SelectorCommand,
-    options: SelectorSuiteOptions<'_>,
-) -> Command {
-    build_cli_with_selector_options(
-        registry,
-        native,
-        SelectorOptionVisibility::for_help(command, options),
-    )
-}
-
-/// Builds the clap command tree with configurable suite-option visibility per selector subcommand.
-fn build_cli_with_selector_options(
-    registry: &SuiteRegistry,
-    native: &NativeBenchmarks,
-    visibility: SelectorOptionVisibility<'_>,
-) -> Command {
-    let info = add_configured_suite_options(
+    let info = add_suite_options(
         base_selector_command("info", "Show benchmark metadata")
             .override_usage(
                 "benchmark_runner info <SUITE> [QUERY_ID]\n       benchmark_runner info <NATIVE_BENCHMARK>",
             ),
         registry,
-        visibility.info,
     );
     let info = add_native_info_subcommands(info, native);
-    let query = add_configured_suite_options(
+    let query = add_suite_options(
         base_selector_command("query", "Show parsed benchmark SQL"),
         registry,
-        visibility.query,
     );
 
     Command::new("benchmark_runner")
@@ -331,14 +237,8 @@ fn run_usage() -> &'static str {
 }
 
 /// Formats the SQL benchmark `run` help sections reused by SQL `info`.
-pub(crate) fn format_sql_run_help_sections_styled(
-    registry: &SuiteRegistry,
-) -> Result<String> {
-    let run = add_configured_suite_options(
-        base_run_command(),
-        registry,
-        SelectorSuiteOptions::None,
-    );
+pub(crate) fn format_sql_run_help_sections_styled() -> Result<String> {
+    let run = base_run_command();
     let mut output = String::new();
 
     writeln!(output, "{}", header(format!("Usage: {}", run_usage())))?;
@@ -406,31 +306,19 @@ fn base_selector_command(name: &'static str, about: &'static str) -> Command {
         )
 }
 
-/// Adds each distinct suite-defined option to a command.
+/// Adds each distinct suite-defined option to a command under the shared
+/// `Suite Options` heading.
 fn add_suite_options(mut command: Command, registry: &SuiteRegistry) -> Command {
     let mut seen = BTreeSet::new();
 
     for suite in registry.suites() {
         for option in &suite.options {
             if seen.insert(option.name.clone()) {
-                command = add_suite_option(command, option, SUITE_OPTIONS_HEADING, false);
+                command = add_suite_option(command, option);
             }
         }
     }
     command
-}
-
-/// Applies the requested suite-option visibility mode to a selector command.
-fn add_configured_suite_options(
-    command: Command,
-    registry: &SuiteRegistry,
-    suite_options: SelectorSuiteOptions<'_>,
-) -> Command {
-    match suite_options {
-        SelectorSuiteOptions::All => add_suite_options(command, registry),
-        SelectorSuiteOptions::Suite(suite) => add_suite_options_for(command, suite),
-        SelectorSuiteOptions::None => command,
-    }
 }
 
 /// Adds each visible native benchmark as an info-only selector subcommand.
@@ -445,73 +333,37 @@ fn add_native_info_subcommands(
     command
 }
 
-/// Adds only one suite's options under a suite-specific help heading.
-fn add_suite_options_for(mut command: Command, suite: &SuiteConfig) -> Command {
-    let heading = suite_options_heading(&suite.name);
-
-    for option in &suite.options {
-        command = add_suite_option(command, option, heading.clone(), true);
-    }
-
-    command
-}
-
-/// Registers one suite-defined option with clap, using direct short aliases
-/// when clap supports them and documenting multi-character aliases otherwise.
-fn add_suite_option(
-    command: Command,
-    option: &SuiteOption,
-    heading: impl Into<clap::builder::Str>,
-    register_short_alias: bool,
-) -> Command {
-    let name = option.name.clone();
-    let (short, help) = match &option.short {
-        Some(short) if register_short_alias && short.chars().count() == 1 => {
-            (short.chars().next(), option.help.clone())
-        }
-        Some(short) => (None, format!("{} Alias: -{short}.", option.help)),
-        None => (None, option.help.clone()),
+/// Registers one suite-defined option with clap as a long `--name` flag.
+///
+/// Short aliases are documented in help text rather than registered directly:
+/// clap supports only single-character shorts, and every alias (including
+/// multi-character ones such as `-sf`) is rewritten to its long form before
+/// parsing by [`normalize_suite_option_aliases_with_options`].
+fn add_suite_option(command: Command, option: &SuiteOption) -> Command {
+    let help = match &option.short {
+        Some(short) => format!("{} Alias: -{short}.", option.help),
+        None => option.help.clone(),
     };
-    let mut arg = Arg::new(name.clone())
-        .long(name)
-        .value_name("VALUE")
-        .help(help)
-        .help_heading(heading);
-    if let Some(short) = short {
-        arg = arg.short(short);
-    }
 
-    command.arg(arg)
+    command.arg(
+        Arg::new(option.name.clone())
+            .long(option.name.clone())
+            .value_name("VALUE")
+            .help(help)
+            .help_heading(SUITE_OPTIONS_HEADING),
+    )
 }
 
-/// Formats the suite-specific heading used for selected suite options.
-fn suite_options_heading(suite_name: &str) -> String {
-    format!("{SUITE_OPTIONS_HEADING} ({suite_name})")
-}
-
-/// Detects whether the provided arguments are asking for help on a selector
-/// subcommand and, when possible, extracts the suite name preceding `--help`.
-fn selector_help_request(
-    suite_cli_options: &SuiteCliOptions,
-    args: &[OsString],
-) -> Option<(SelectorCommand, Option<String>)> {
-    if !args.iter().any(|arg| is_help_arg(arg)) {
-        return None;
-    }
-
-    selector_request(suite_cli_options, args, true)
-}
-
-/// Scans raw CLI arguments to find a selector before clap parses them.
+/// Scans raw CLI arguments to find the suite selector for `info`/`query`.
+///
+/// Returns the suite name that follows the selector subcommand, if one appears
+/// before any option flags. Used to pick the suite whose short aliases should be
+/// rewritten to long form before clap parses the arguments.
 fn selector_request(
     suite_cli_options: &SuiteCliOptions,
     args: &[OsString],
-    stop_at_help: bool,
-) -> Option<(SelectorCommand, Option<String>)> {
-    let (command_position, command) =
-        args.iter().enumerate().find_map(|(position, arg)| {
-            selector_command(arg).map(|command| (position, command))
-        })?;
+) -> Option<String> {
+    let command_position = args.iter().position(|arg| is_selector_command(arg))?;
     let mut skip_next = false;
 
     for arg in &args[command_position + 1..] {
@@ -520,11 +372,7 @@ fn selector_request(
             continue;
         }
 
-        if stop_at_help && is_help_arg(arg) {
-            return Some((command, None));
-        }
-
-        if is_value_taking_selector_option(suite_cli_options, command, arg) {
+        if is_value_taking_selector_option(suite_cli_options, arg) {
             skip_next = true;
             continue;
         }
@@ -533,31 +381,21 @@ fn selector_request(
             continue;
         }
 
-        return Some((command, Some(arg.to_string_lossy().into_owned())));
+        return Some(arg.to_string_lossy().into_owned());
     }
 
-    Some((command, None))
+    None
 }
 
-/// Converts a raw argument into a selector command name when it matches.
-fn selector_command(arg: &OsStr) -> Option<SelectorCommand> {
-    match arg.to_str()? {
-        "info" => Some(SelectorCommand::Info),
-        "query" => Some(SelectorCommand::Query),
-        _ => None,
-    }
+/// Returns whether a raw argument is a SQL selector subcommand (`info`/`query`).
+fn is_selector_command(arg: &OsStr) -> bool {
+    matches!(arg.to_str(), Some("info" | "query"))
 }
 
-/// Returns whether a raw argument requests clap help.
-fn is_help_arg(arg: &OsStr) -> bool {
-    arg == "--help" || arg == "-h"
-}
-
-/// Returns whether an argument is an option whose next token should be skipped
-/// while looking for a suite selector before `--help`.
+/// Returns whether an argument is an option whose next token is its value and
+/// should therefore be skipped while looking for a suite selector.
 fn is_value_taking_selector_option(
     suite_cli_options: &SuiteCliOptions,
-    _command: SelectorCommand,
     arg: &OsStr,
 ) -> bool {
     let arg_text = arg.to_string_lossy();
@@ -582,8 +420,7 @@ where
         .into_iter()
         .map(|arg| arg.as_ref().to_os_string())
         .collect::<Vec<_>>();
-    let aliases = selector_request(suite_cli_options, &args, false)
-        .and_then(|(_, selector)| selector)
+    let aliases = selector_request(suite_cli_options, &args)
         .and_then(|selector| suite_cli_options.aliases_by_suite.get(&selector));
 
     args.into_iter()
@@ -721,17 +558,6 @@ mod tests {
             .collect()
     }
 
-    fn build_cli_for_args<I, T>(registry: &SuiteRegistry, args: I) -> Command
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<OsStr>,
-    {
-        let suite_cli_options = SuiteCliOptions::new(registry);
-        let args = os_args(args);
-        let native = native_registry(registry);
-        build_cli_for_args_with_options(registry, &suite_cli_options, &native, &args)
-    }
-
     fn command_from_matches(
         registry: &SuiteRegistry,
         matches: &ArgMatches,
@@ -839,11 +665,10 @@ help = "Selects the suite option."
 
     #[test]
     fn help_mentions_query_id() {
-        let help =
-            build_cli_for_args(&registry(), ["benchmark_runner", "query", "--help"])
-                .try_get_matches_from(["benchmark_runner", "query", "--help"])
-                .unwrap_err()
-                .to_string();
+        let help = build_cli_with_native(&registry())
+            .try_get_matches_from(["benchmark_runner", "query", "--help"])
+            .unwrap_err()
+            .to_string();
 
         assert!(help.contains("SUITE"));
         assert!(help.contains("SQL benchmark suite name"));
@@ -868,7 +693,7 @@ help = "Selects the suite option."
 
     #[test]
     fn sql_run_help_sections_use_run_command_metadata() {
-        let output = format_sql_run_help_sections_styled(&registry()).unwrap();
+        let output = format_sql_run_help_sections_styled().unwrap();
 
         assert!(output.contains("Usage:"));
         assert!(output.contains("SQL Benchmark Target:"));
