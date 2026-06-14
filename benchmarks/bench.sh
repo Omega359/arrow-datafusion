@@ -161,11 +161,32 @@ Supported Configuration (Environment Variables)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
+SQL_CARGO_COMMAND   command that runs the SQL benchmark harness
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
+RESULTS_DIR         directory where benchmark result files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
 SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
 DATAFUSION_*        Set the given datafusion configuration
+
+SQL benchmark harness variables:
+BENCH_NAME          SQL benchmark group to run
+BENCH_QUERY         SQL benchmark query selector (set from run [benchmark] [query])
+BENCH_SUBGROUP      SQL benchmark subgroup selector
+BENCH_SIZE          SQL benchmark scale factor selector
+CLICKBENCH_TYPE     clickbench data layout (single or partitioned)
+H2O_BENCH_SIZE      h2o dataset size (small, medium, or big)
+H2O_FILE_TYPE       h2o file format (csv or parquet)
+IMDB_FILE_TYPE      imdb SQL benchmark file type (default parquet)
+PRED_ROWS           predicate_eval synthetic row count
+PRED_FILL           predicate_eval filler width
+
+SQL benchmark file options not set by bench.sh defaults:
+BENCH_SORTED                 sort_tpch load order toggle (default false)
+LIMIT                        sort_tpch LIMIT clause toggle (default false)
+HASH_JOIN_BUFFERING_CAPACITY tpch hash join buffering capacity (default 0)
+SORTED_BY                    clickbench_sorted WITH ORDER column (default EventTime)
+SORTED_ORDER                 clickbench_sorted WITH ORDER direction (default ASC)
 "
     exit 1
 }
@@ -622,7 +643,14 @@ main() {
     esac
 }
 
-
+run_sql_benchmark() {
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      "$@" \
+      bash -c "$SQL_CARGO_COMMAND"
+}
 
 # Creates TPCH data at a certain scale factor, if it doesn't already
 # exist
@@ -872,11 +900,16 @@ run_tpcds() {
         exit 1
     fi
 
-    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=tpcds \
+      BENCH_SIZE="1" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the compile profile benchmark helper
@@ -949,36 +982,54 @@ data_clickbench_partitioned() {
 
 # Runs the clickbench benchmark with a single large parquet file
 run_clickbench_1() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=clickbench \
+      CLICKBENCH_TYPE=single \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
 run_clickbench_partitioned() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=clickbench \
+      CLICKBENCH_TYPE=partitioned \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
  # Runs the clickbench benchmark with the partitioned parquet files and filter_pushdown enabled
 run_clickbench_pushdown() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=clickbench \
+      CLICKBENCH_TYPE=partitioned \
+      DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+      DATAFUSION_EXECUTION_PARQUET_REORDER_FILTERS=true \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
 run_clickbench_extended() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=clickbench_extended \
+      CLICKBENCH_TYPE=single \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -1088,12 +1139,14 @@ data_imdb() {
 
 # Runs the imdb benchmark
 run_imdb() {
-    IMDB_DIR="${DATA_DIR}/imdb"
-
-    RESULTS_FILE="${RESULTS_DIR}/imdb.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=imdb \
+      IMDB_FILE_TYPE=parquet \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 data_h2o() {
@@ -1130,25 +1183,11 @@ run_h2o() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
     DATA_FORMAT=$(echo "$DATA_FORMAT" | tr '[:upper:]' '[:lower:]')
-    RUN_Type=${3:-"groupby"}
+    H2O_SIZE=$(echo "$SIZE" | tr '[:upper:]' '[:lower:]')
+    RUN_TYPE=${3:-"groupby"}
 
-    # Data directory and results file path
-    H2O_DIR="${DATA_DIR}/h2o"
-    RESULTS_FILE="${RESULTS_DIR}/h2o.json"
-
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running h2o groupby benchmark..."
-
-    # Set the file name based on the size
-    case "$SIZE" in
-        "SMALL")
-            FILE_NAME="G1_1e7_1e7_100_0.${DATA_FORMAT}"  # For small dataset
-            ;;
-        "MEDIUM")
-            FILE_NAME="G1_1e8_1e8_100_0.${DATA_FORMAT}"  # For medium dataset
-            ;;
-        "BIG")
-            FILE_NAME="G1_1e9_1e9_100_0.${DATA_FORMAT}"  # For big dataset
+    case "$H2O_SIZE" in
+        "small"|"medium"|"big")
             ;;
         *)
             echo "Invalid size. Valid options are SMALL, MEDIUM, or BIG."
@@ -1156,16 +1195,16 @@ run_h2o() {
             ;;
     esac
 
-     # Set the query file name based on the RUN_Type
-    QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
-
-    # Run the benchmark using the dynamically constructed file path and query file
-    debug_run $CARGO_COMMAND --bin dfbench -- h2o \
-        --iterations 3 \
-        --path "${H2O_DIR}/${FILE_NAME}" \
-        --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}" \
-         ${QUERY_ARG} ${LATENCY_ARG}
+    echo "Running h2o groupby benchmark..."
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=h2o \
+      BENCH_SUBGROUP="${RUN_TYPE}" \
+      H2O_BENCH_SIZE="${H2O_SIZE}" \
+      H2O_FILE_TYPE="${DATA_FORMAT}" \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Utility function to run h2o join/window benchmark
@@ -1174,34 +1213,11 @@ h2o_runner() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
     DATA_FORMAT=$(echo "$DATA_FORMAT" | tr '[:upper:]' '[:lower:]')
-    RUN_Type=${3:-"join"}
+    H2O_SIZE=$(echo "$SIZE" | tr '[:upper:]' '[:lower:]')
+    RUN_TYPE=${3:-"join"}
 
-    # Data directory and results file path
-    H2O_DIR="${DATA_DIR}/h2o"
-    RESULTS_FILE="${RESULTS_DIR}/h2o_${RUN_Type}.json"
-
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running h2o ${RUN_Type} benchmark..."
-
-    # Set the file name based on the size
-    case "$SIZE" in
-        "SMALL")
-            X_TABLE_FILE_NAME="J1_1e7_NA_0.${DATA_FORMAT}"
-            SMALL_TABLE_FILE_NAME="J1_1e7_1e1_0.${DATA_FORMAT}"
-            MEDIUM_TABLE_FILE_NAME="J1_1e7_1e4_0.${DATA_FORMAT}"
-            LARGE_TABLE_FILE_NAME="J1_1e7_1e7_NA.${DATA_FORMAT}"
-            ;;
-        "MEDIUM")
-            X_TABLE_FILE_NAME="J1_1e8_NA_0.${DATA_FORMAT}"
-            SMALL_TABLE_FILE_NAME="J1_1e8_1e2_0.${DATA_FORMAT}"
-            MEDIUM_TABLE_FILE_NAME="J1_1e8_1e5_0.${DATA_FORMAT}"
-            LARGE_TABLE_FILE_NAME="J1_1e8_1e8_NA.${DATA_FORMAT}"
-            ;;
-        "BIG")
-            X_TABLE_FILE_NAME="J1_1e9_NA_0.${DATA_FORMAT}"
-            SMALL_TABLE_FILE_NAME="J1_1e9_1e3_0.${DATA_FORMAT}"
-            MEDIUM_TABLE_FILE_NAME="J1_1e9_1e6_0.${DATA_FORMAT}"
-            LARGE_TABLE_FILE_NAME="J1_1e9_1e9_NA.${DATA_FORMAT}"
+    case "$H2O_SIZE" in
+        "small"|"medium"|"big")
             ;;
         *)
             echo "Invalid size. Valid options are SMALL, MEDIUM, or BIG."
@@ -1209,15 +1225,16 @@ h2o_runner() {
             ;;
     esac
 
-    # Set the query file name based on the RUN_Type
-    QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
-
-    debug_run $CARGO_COMMAND --bin dfbench -- h2o \
-        --iterations 3 \
-        --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
-        --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}" \
-         ${QUERY_ARG} ${LATENCY_ARG}
+    echo "Running h2o ${RUN_TYPE} benchmark..."
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=h2o \
+      BENCH_SUBGROUP="${RUN_TYPE}" \
+      H2O_BENCH_SIZE="${H2O_SIZE}" \
+      H2O_FILE_TYPE="${DATA_FORMAT}" \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runners for h2o join benchmark
@@ -1488,12 +1505,15 @@ run_sort_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-    RESULTS_FILE="${RESULTS_DIR}/sort_tpch${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=sort_tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1508,27 +1528,34 @@ run_topk_tpch() {
 
 # Runs the nlj benchmark
 run_nlj() {
-    RESULTS_FILE="${RESULTS_DIR}/nlj.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env BENCH_NAME=nlj \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the hj benchmark
 run_hj() {
-    TPCH_DIR="${DATA_DIR}/tpch_sf10"
-    RESULTS_FILE="${RESULTS_DIR}/hj.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=hj \
+      BENCH_SIZE="10" \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the smj benchmark
 run_smj() {
-    RESULTS_FILE="${RESULTS_DIR}/smj.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running smj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env BENCH_NAME=smj \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the dict benchmark
@@ -1662,23 +1689,18 @@ EOF
 
 # Runs the sorted data benchmark with prefer_existing_sort configuration
 run_clickbench_sorted() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_sorted.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sorted data benchmark with prefer_existing_sort optimization..."
 
     # Ensure sorted data exists
     clickbench_sorted
 
-    # Run benchmark with prefer_existing_sort configuration
-    # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
-        --iterations 5 \
-        --path "${DATA_DIR}/hits_sorted.parquet" \
-        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
-        --sorted-by "EventTime" \
-        -c datafusion.optimizer.prefer_existing_sort=true \
-        -o "${RESULTS_FILE}" \
-        ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run env \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      BENCH_NAME=clickbench_sorted \
+      DATAFUSION_OPTIMIZER_PREFER_EXISTING_SORT=true \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
